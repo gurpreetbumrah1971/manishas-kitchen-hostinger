@@ -1,0 +1,7 @@
+RewriteEngine On
+
+# Send REST-style endpoints such as /api/health and /api/orders to the PHP
+# front controller, while allowing real files to be served normally.
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ index.php [L,QSA]

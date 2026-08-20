@@ -1,0 +1,18 @@
+Options -Indexes
+RewriteEngine On
+
+# Keep the single-page admin application reachable at its original URLs.
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^admin(?:/.*)?$ admin/index.html [L]
+
+# Preserve friendly customer URLs used by the original application.
+RewriteRule ^menu$ menu.html [L]
+RewriteRule ^checkout$ checkout.html [L]
+RewriteRule ^about$ about.html [L]
+
+# Do not expose deployment configuration or SQL files if this folder is used
+# directly as public_html.
+<FilesMatch "^(config\.php|database\.sql|\.env)$">
+  Require all denied
+</FilesMatch>
