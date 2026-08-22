@@ -11,6 +11,7 @@ Do **not** deploy it through **Add Website → Deploy Web App / Node.js Web App 
 If a static web app was already created, create or switch to a **Custom PHP/HTML** website for the domain, then connect this repository using the Git option above. Point the domain to that PHP website before testing.
 
 1. In hPanel, create a MySQL database and database user, then import `database.sql` in phpMyAdmin. It includes the complete current menu catalog and its image paths.
+   - If you already imported an earlier `database.sql`, import `menu-migration.sql` instead. It safely updates the existing menu and adds missing items without recreating the tables.
 2. Edit `config.php` with the database host, database name, user, password, and a long unique `APP_SECRET`.
 3. Change `ADMIN_DEFAULT_PASSWORD` before the first login. The first successful login creates that admin account automatically.
 4. For Git deployment, Hostinger places the repository contents in `public_html` automatically. For a manual upload, upload the contents of this folder (not the folder itself) into the domain's `public_html` directory. Ensure hidden files are uploaded, especially `.htaccess`.
