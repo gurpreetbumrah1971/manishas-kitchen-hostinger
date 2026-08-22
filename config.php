@@ -17,10 +17,10 @@ if (is_file($localReferenceEnv)) {
 }
 $localDatabase = $localDatabaseUrl ? parse_url($localDatabaseUrl) : null;
 define('DB_HOST', $localDatabase['host'] ?? 'localhost');
-define('DB_NAME', $localDatabase ? 'order_booking_hostinger' : 'CHANGE_ME_DATABASE');
-define('DB_USER', isset($localDatabase['user']) ? rawurldecode($localDatabase['user']) : 'CHANGE_ME_USER');
-define('DB_PASS', isset($localDatabase['pass']) ? rawurldecode($localDatabase['pass']) : 'CHANGE_ME_PASSWORD');
-const APP_SECRET = 'replace-this-with-a-long-random-secret-before-going-live';
+define('DB_NAME', $localDatabase ? 'order_booking_hostinger' : 'u515749657_manikitchen');
+define('DB_USER', isset($localDatabase['user']) ? rawurldecode($localDatabase['user']) : 'u515749657_manisha');
+define('DB_PASS', isset($localDatabase['pass']) ? rawurldecode($localDatabase['pass']) : 'Manisha1981!');
+const APP_SECRET = '5fa703cb0bd8adc42c185ea066191b5d6bea2edf7cd26a079e3f398cdc54eceb';
 const ADMIN_DEFAULT_USER = 'admin';
 const ADMIN_DEFAULT_PASSWORD = 'admin123';
 
