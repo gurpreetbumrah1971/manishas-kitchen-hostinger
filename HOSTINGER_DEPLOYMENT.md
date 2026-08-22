@@ -10,7 +10,7 @@ Do **not** deploy it through **Add Website → Deploy Web App / Node.js Web App 
 
 If a static web app was already created, create or switch to a **Custom PHP/HTML** website for the domain, then connect this repository using the Git option above. Point the domain to that PHP website before testing.
 
-1. In hPanel, create a MySQL database and database user, then import `database.sql` in phpMyAdmin.
+1. In hPanel, create a MySQL database and database user, then import `database.sql` in phpMyAdmin. It includes the complete current menu catalog and its image paths.
 2. Edit `config.php` with the database host, database name, user, password, and a long unique `APP_SECRET`.
 3. Change `ADMIN_DEFAULT_PASSWORD` before the first login. The first successful login creates that admin account automatically.
 4. For Git deployment, Hostinger places the repository contents in `public_html` automatically. For a manual upload, upload the contents of this folder (not the folder itself) into the domain's `public_html` directory. Ensure hidden files are uploaded, especially `.htaccess`.
@@ -28,5 +28,5 @@ For local XAMPP only, this build reads the existing reference app's MSG91 setup 
 - Apache rewrites retain `/menu`, `/checkout`, and `/admin/...` URLs.
 - The `/api` implementation uses PHP PDO with MySQL and has no Node runtime dependency.
 - Orders, menu availability, admin sign-in, customer sessions, wallet addresses, and order-status polling are implemented locally.
-- `database.sql` includes the core current menu. Add any extra products from the Admin Menu screen after deployment.
+- `database.sql` includes all 10 current menu categories and 69 menu items. The referenced food images are included in the repository under `assets/food/`.
 - `package.json` is intentionally absent: it is not part of a PHP deployment and adding one would not make the PHP backend work in a static/Node deployment.
