@@ -20,7 +20,9 @@ If a static web app was already created, create or switch to a **Custom PHP/HTML
 
 ## MSG91 OTP
 
-The PHP API uses MSG91's OTP Widget. Set `MSG91_WIDGET_ID` and `MSG91_TOKEN_AUTH` (the Widget token) either as hosting environment variables or in the clearly marked values in `config.php`, and leave `OTP_PROVIDER` set to `msg91`. The same Widget token is used to initialise the browser widget and to verify the resulting `reqId` OTP session in PHP. `MSG91_AUTHKEY` is not used by this OTP flow.
+The PHP API uses MSG91's OTP Widget. The same Widget token is used to initialise the browser widget and to verify the resulting `reqId` OTP session in PHP. `MSG91_AUTHKEY` is not used by this OTP flow.
+
+For Hostinger Git deployments, create a private file named `config.local.php` **one directory above** the website's `public_html` directory. Copy the structure from `config.local.example.php` and set your `MSG91_WIDGET_ID` and `MSG91_TOKEN_AUTH` values from the MSG91 OTP Widget dashboard. This file is ignored by Git, so it persists through deployments and never enters the repository. Alternatively, define the same names as PHP environment variables if your hosting plan provides them.
 
 For local XAMPP only, this build reads the existing reference app's MSG91 setup without modifying it. If any MSG91 credential is missing, OTP requests are rejected instead of falling back to a visible test code.
 

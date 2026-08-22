@@ -6,6 +6,14 @@
  * the reference application's local MySQL connection. Hostinger never has
  * that path, so production continues to use the values below. */
 $localReferenceEnv = 'C:/XAMPP/htdocs/order booking system/server/.env';
+$privateConfig = [];
+// On shared hosting, keep secrets one directory above public_html. This file
+// is deliberately ignored by Git, so deployments never overwrite or expose it.
+$privateConfigPath = dirname(__DIR__) . '/config.local.php';
+if (is_file($privateConfigPath)) {
+  $loadedConfig = require $privateConfigPath;
+  if (is_array($loadedConfig)) $privateConfig = $loadedConfig;
+}
 $localDatabaseUrl = null;
 if (is_file($localReferenceEnv)) {
   // The reference .env has values which are not valid PHP INI syntax, so
@@ -39,9 +47,12 @@ function localEnvValue(string $key): string {
   return trim($match[1]);
 }
 function configValue(string ...$keys): string {
+  global $privateConfig;
   foreach ($keys as $key) {
     $value = getenv($key);
     if ($value !== false && trim((string)$value) !== '') return trim((string)$value);
+    $value = $privateConfig[$key] ?? '';
+    if (is_string($value) && trim($value) !== '') return trim($value);
     $value = localEnvValue($key);
     if ($value !== '') return $value;
   }
