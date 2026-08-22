@@ -24,16 +24,33 @@ const APP_SECRET = '5fa703cb0bd8adc42c185ea066191b5d6bea2edf7cd26a079e3f398cdc54
 const ADMIN_DEFAULT_USER = 'admin';
 const ADMIN_DEFAULT_PASSWORD = 'admin123';
 
-// MSG91 widget credentials. Locally these are read from the working reference
-// setup; for Hostinger replace the empty fallbacks with your MSG91 values.
+// MSG91 widget credentials. `MSG91_TOKEN_AUTH` is the widget token generated
+// in MSG91's OTP Widget screen and is used by both the browser and PHP to
+// verify the widget's reqId OTP session. `MSG91_AUTHKEY` is retained only for
+// other MSG91 services and is not used by this OTP Widget flow.
+// On shared hosting without environment variables, paste the three values
+// below. Keep this file outside public_html when the host permits it.
+$msg91WidgetId = '';
+$msg91TokenAuth = '';
+$msg91Authkey = '';
 function localEnvValue(string $key): string {
   global $localEnvText;
   if (!isset($localEnvText) || !preg_match('/^' . preg_quote($key, '/') . '\s*=\s*["\']?([^\r\n"\']+)/m', $localEnvText, $match)) return '';
   return trim($match[1]);
 }
-define('OTP_PROVIDER', localEnvValue('OTP_PROVIDER') ?: 'msg91');
-define('MSG91_WIDGET_ID', localEnvValue('MSG91_WIDGET_ID') ?: '');
-define('MSG91_TOKEN_AUTH', localEnvValue('MSG91_TOKEN_AUTH') ?: '');
+function configValue(string ...$keys): string {
+  foreach ($keys as $key) {
+    $value = getenv($key);
+    if ($value !== false && trim((string)$value) !== '') return trim((string)$value);
+    $value = localEnvValue($key);
+    if ($value !== '') return $value;
+  }
+  return '';
+}
+define('OTP_PROVIDER', strtolower(configValue('OTP_PROVIDER') ?: 'msg91'));
+define('MSG91_WIDGET_ID', configValue('MSG91_WIDGET_ID') ?: $msg91WidgetId);
+define('MSG91_TOKEN_AUTH', configValue('MSG91_TOKEN_AUTH', 'MSG91_WIDGET_TOKEN', 'MSG91_WIDGET_AUTH_TOKEN') ?: $msg91TokenAuth);
+define('MSG91_AUTHKEY', configValue('MSG91_AUTHKEY', 'MSG91_AUTH_KEY') ?: $msg91Authkey);
 // XAMPP's bundled CA list is outdated on this computer. Disable verification
 // only for this local reference-assisted setup; Hostinger keeps it enabled.
 define('MSG91_SSL_VERIFY', !is_file($localReferenceEnv));

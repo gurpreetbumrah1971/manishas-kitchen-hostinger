@@ -20,9 +20,9 @@ If a static web app was already created, create or switch to a **Custom PHP/HTML
 
 ## MSG91 OTP
 
-The PHP API supports the same MSG91 widget flow as the original app: the browser sends the OTP through the MSG91 widget and PHP verifies the supplied OTP against that widget session. For Hostinger, replace the empty fallback values for `MSG91_WIDGET_ID` and `MSG91_TOKEN_AUTH` in `config.php` before launch; leave `OTP_PROVIDER` set to `msg91`.
+The PHP API uses MSG91's OTP Widget. Set `MSG91_WIDGET_ID` and `MSG91_TOKEN_AUTH` (the Widget token) either as hosting environment variables or in the clearly marked values in `config.php`, and leave `OTP_PROVIDER` set to `msg91`. The same Widget token is used to initialise the browser widget and to verify the resulting `reqId` OTP session in PHP. `MSG91_AUTHKEY` is not used by this OTP flow.
 
-For local XAMPP only, this build reads the existing reference app's MSG91 setup without modifying it. When MSG91 is not configured, the deliberately visible local fallback OTP is `123456`.
+For local XAMPP only, this build reads the existing reference app's MSG91 setup without modifying it. If any MSG91 credential is missing, OTP requests are rejected instead of falling back to a visible test code.
 
 ## Included compatibility changes
 

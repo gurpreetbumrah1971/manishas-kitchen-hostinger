@@ -56,6 +56,14 @@ function msg91RequestIdentifier(data) {
     .find(Boolean) || '';
 }
 
+function msg91ErrorMessage(error) {
+  const message = String(error?.message || error || '').trim();
+  if (/authentication\s*failure|authenticationfailure/i.test(message)) {
+    return 'MSG91 rejected the OTP Widget token. Generate a new token for this Widget ID in MSG91, then update MSG91_TOKEN_AUTH and try again.';
+  }
+  return message || 'MSG91 could not send the OTP.';
+}
+
 function waitForMsg91Methods() {
   return new Promise((resolve, reject) => {
     const deadline = Date.now() + 10000;
@@ -77,29 +85,55 @@ function loadMsg91Widget() {
   if (msg91WidgetPromise) return msg91WidgetPromise;
 
   msg91WidgetPromise = new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = 'https://verify.msg91.com/otp-provider.js';
-    script.async = true;
-    script.onload = async () => {
-      try {
-        if (typeof window.initSendOTP !== 'function') {
-          throw new Error('MSG91 OTP service did not initialise.');
-        }
-        const otpConfig = await msg91OtpConfig();
-        window.initSendOTP({
-          ...otpConfig,
-          exposeMethods: true,
-          success: () => {},
-          failure: () => {},
-        });
-        waitForMsg91Methods().then(resolve, reject);
-      } catch (error) {
-        reject(error);
+    const sources = [
+      'https://verify.msg91.com/otp-provider.js',
+      'https://verify.phone91.com/otp-provider.js',
+    ];
+    let sourceIndex = 0;
+
+    const initialise = async () => {
+      if (typeof window.initSendOTP !== 'function') {
+        throw new Error('MSG91 OTP service did not initialise.');
       }
+      const otpConfig = await msg91OtpConfig();
+      const widgetOptions = {
+        widgetId: otpConfig.widgetId,
+        tokenAuth: otpConfig.tokenAuth,
+        exposeMethods: true,
+        success: () => {},
+        failure: () => {},
+      };
+      // Do not send an empty optional CAPTCHA render target to MSG91.
+      if (otpConfig.captchaRenderId) widgetOptions.captchaRenderId = otpConfig.captchaRenderId;
+      window.initSendOTP(widgetOptions);
+      await waitForMsg91Methods();
     };
-    script.onerror = () => reject(new Error('Could not load MSG91 OTP service.'));
-    document.head.appendChild(script);
+
+    const loadNextSource = () => {
+      const source = sources[sourceIndex++];
+      if (!source) {
+        reject(new Error('Could not load MSG91 OTP service. Please check your internet connection and try again.'));
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = source;
+      script.async = true;
+      script.onload = () => {
+        initialise().then(resolve).catch((error) => {
+          // A loaded script which does not expose MSG91's widget cannot be
+          // recovered by trying another host, so keep its useful error.
+          reject(error);
+        });
+      };
+      script.onerror = loadNextSource;
+      document.head.appendChild(script);
+    };
+
+    loadNextSource();
   });
+  // A rejected promise is otherwise retained for the rest of the page, which
+  // prevents a customer from retrying after a transient network failure.
+  msg91WidgetPromise.catch(() => { msg91WidgetPromise = undefined; });
   return msg91WidgetPromise;
 }
 
@@ -118,7 +152,7 @@ async function sendMsg91Otp(mobileNumber) {
       }
       msg91RequestId = requestId;
       resolve(requestId);
-    }, (error) => reject(new Error(error?.message || 'MSG91 could not send the OTP.')));
+    }, (error) => reject(new Error(msg91ErrorMessage(error))));
   });
 }
 const CASHBACK_NUMBER_KEY = 'mkCashbackNumber';
