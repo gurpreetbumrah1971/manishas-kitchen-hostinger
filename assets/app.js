@@ -2380,7 +2380,7 @@ function showStaticOrderThankYou({ order, total, amount, paymentMethod, whatsapp
       <div class="cashback-earned-card">
         <span>Cashback for next order</span>
         <strong>${money(cashbackEarned)}</strong>
-          <p>10% of the eligible food bill has been added to your mobile wallet.</p>
+          <p>Cashback from the eligible food bill has been added to your mobile wallet.</p>
         ${cashbackRedeemed > 0 ? `<small>You redeemed ${money(cashbackRedeemed)} on this order.</small>` : ''}
       </div>
       <form class="special-day-save-form" data-special-day-save-form>
