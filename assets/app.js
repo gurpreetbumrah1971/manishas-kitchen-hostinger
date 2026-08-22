@@ -314,6 +314,32 @@ function rupeeCompact(value) {
   })}`;
 }
 
+function istDate(value) {
+  if (!value) return null;
+  const source = String(value);
+  // MySQL timestamps do not include an offset. They are stored and served in IST.
+  const normalised = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(source)
+    ? `${source.replace(' ', 'T')}+05:30`
+    : source;
+  const date = new Date(normalised);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatIstTime(value) {
+  const date = istDate(value);
+  return date ? new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true,
+  }).format(date) : '';
+}
+
+function formatIstDateTime(value) {
+  const date = istDate(value);
+  return date ? new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric',
+    hour: 'numeric', minute: '2-digit', hour12: true,
+  }).format(date) : '';
+}
+
 function upiPaymentConfig() {
   const root = document.querySelector('[data-upi-payment]');
   return {
@@ -465,7 +491,7 @@ function renderAccount(account) {
         <a class="btn primary" href="${pageUrl('checkout.html')}">Redeem on next order</a>
         <button class="btn ghost" type="button" data-account-logout>Logout</button>
       </section>
-      <section class="card account-history-card"><div class="account-section-title"><h2>Order History</h2><span>${orders.length} order${orders.length === 1 ? '' : 's'}</span></div>${orders.length ? `<div class="order-history-list">${orders.map((order) => `<article class="order-history-row"><div><strong>${escapeHtml(order.orderNumber)}</strong><small>${escapeHtml(new Date(order.createdAt).toLocaleDateString('en-IN'))} · ${escapeHtml(order.status)}</small><p>${escapeHtml((order.items || []).map((item) => `${item.quantity} x ${item.name}`).join(', '))}</p></div><div class="order-history-total"><strong>${money(order.grandTotal)}</strong><small>${order.cashbackEarned > 0 ? `+${money(order.cashbackEarned)} cashback` : 'No cashback'}</small></div></article>`).join('')}</div>` : '<p class="cashback-empty">No orders found for this mobile number yet.</p>'}</section>
+      <section class="card account-history-card"><div class="account-section-title"><h2>Order History</h2><span>${orders.length} order${orders.length === 1 ? '' : 's'}</span></div>${orders.length ? `<div class="order-history-list">${orders.map((order) => `<article class="order-history-row"><div><strong>${escapeHtml(order.orderNumber)}</strong><small>${escapeHtml(formatIstDateTime(order.createdAt))} IST · ${escapeHtml(order.status)}</small><p>${escapeHtml((order.items || []).map((item) => `${item.quantity} x ${item.name}`).join(', '))}</p></div><div class="order-history-total"><strong>${money(order.grandTotal)}</strong><small>${order.cashbackEarned > 0 ? `+${money(order.cashbackEarned)} cashback` : 'No cashback'}</small></div></article>`).join('')}</div>` : '<p class="cashback-empty">No orders found for this mobile number yet.</p>'}</section>
       <section class="card account-history-card"><div class="account-section-title"><h2>Saved Addresses</h2><span>${(customer.savedAddresses || []).length} saved</span></div>${savedAddressCardsHtml(customer.savedAddresses || [])}</section>
       <section class="card account-history-card"><div class="account-section-title"><h2>Special Days</h2><span>Birthday</span></div><form class="special-day-save-form" data-special-day-save-form>${specialDayFieldsHtml(customer)}</form></section>
       <section class="card account-history-card"><div class="account-section-title"><h2>Cashback Activity</h2><span>Latest credits and redemptions</span></div>${cashbackTransactionHtml(account.transactions || [])}</section>
@@ -592,7 +618,7 @@ function cashbackTransactionHtml(transactions) {
           <div class="cashback-transaction">
             <span>
               <strong>${escapeHtml(transaction.note || transaction.type)}</strong>
-              <small>${escapeHtml(new Date(transaction.createdAt).toLocaleDateString('en-IN'))}</small>
+              <small>${escapeHtml(formatIstDateTime(transaction.createdAt))} IST</small>
             </span>
             <b class="${isRedeemed ? 'cashback-debit' : 'cashback-credit'}">${prefix}${money(transaction.amount)}</b>
           </div>
@@ -2174,8 +2200,7 @@ function statusMessage(status) {
 }
 
 function shortTime(value) {
-  if (!value) return '';
-  return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return formatIstTime(value);
 }
 
 function orderStepText(step, status) {
@@ -2250,7 +2275,7 @@ function updateOrderStatusPanel(status) {
   updateOrderStatusSteps(status);
   if (updated) {
     updated.textContent = status
-      ? `Updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+      ? `Updated ${formatIstTime(new Date())} IST`
       : 'Checking status...';
   }
 
@@ -2302,6 +2327,7 @@ function showStaticOrderThankYou({ order, total, amount, paymentMethod, whatsapp
   if (!section) return;
 
   const orderNumber = order.orderNumber || order.order_number || '';
+  const receivedAt = formatIstDateTime(order.createdAt || order.created_at || new Date());
   const paymentAmount = Number(amount || parseMoney(total));
   const cashbackEarned = Number(order.cashbackEarned || (paymentAmount * 0.10) || 0);
   const cashbackRedeemed = Number(order.cashbackRedeemed || 0);
@@ -2315,6 +2341,7 @@ function showStaticOrderThankYou({ order, total, amount, paymentMethod, whatsapp
     <div class="success-panel checkout-thank-you">
       <h1>Thank you for your order!</h1>
       <p>Your order has been received.</p>
+      <p class="order-received-at">Received: ${escapeHtml(receivedAt)} IST</p>
       <div class="thank-you-total">
         <span>Total Amount</span>
         <strong>${escapeHtml(total)}</strong>
@@ -2465,11 +2492,33 @@ if (checkoutForm) checkoutForm.addEventListener('submit', async (event) => {
       }
       return;
     }
-    const address = String((document.querySelector('[name="address"]') || {}).value || '').trim() || null;
+    const isHomeDelivery = getDeliveryType() === 'home_delivery';
+    const locality = getSelectedLocality();
+    const sector = getSelectedSector();
+    const customLocation = getCustomLocation();
+    const address = isHomeDelivery
+      ? String((document.querySelector('[name="address"]') || {}).value || '').trim() || null
+      : null;
     const selectedAddressLabel = String((document.querySelector('[name="address_label"]') || {}).value || 'Home').trim();
     const customAddressLabel = String((document.querySelector('[name="custom_address_label"]') || {}).value || '').trim();
     const addressLabel = selectedAddressLabel === 'Custom' ? customAddressLabel : selectedAddressLabel;
-    const shouldSaveAddress = Boolean((document.querySelector('[name="save_address"]') || {}).checked);
+    const shouldSaveAddress = isHomeDelivery && Boolean((document.querySelector('[name="save_address"]') || {}).checked);
+    if (isHomeDelivery && !address) {
+      alert('Please enter your delivery address for Home Delivery.');
+      if (submitButton) {
+        submitButton.disabled = false;
+        submitButton.textContent = originalButtonText;
+      }
+      return;
+    }
+    if (isHomeDelivery && (!locality || (locality === 'koparkhairne' && !sector) || (locality === 'other' && !customLocation))) {
+      alert('Please select your delivery locality and complete the location details.');
+      if (submitButton) {
+        submitButton.disabled = false;
+        submitButton.textContent = originalButtonText;
+      }
+      return;
+    }
     if (shouldSaveAddress && (!address || !addressLabel)) {
       alert('Enter both an address title and delivery address before saving.');
       if (submitButton) {
@@ -2494,7 +2543,7 @@ if (checkoutForm) checkoutForm.addEventListener('submit', async (event) => {
       studentInstitution: studentDiscountDetails().eligible ? studentDiscountDetails().institution : null,
       studentGrade: studentDiscountDetails().eligible ? studentDiscountDetails().grade : null,
       referralCode: appliedReferralCode() || null,
-      orderType: 'DINE_IN',
+      orderType: isHomeDelivery ? 'DELIVERY' : 'DINE_IN',
       paymentMethod: formData.get('payment_method') || 'UPI',
       totalAmount: subtotal,
       gstAmount,
@@ -2692,6 +2741,7 @@ document.addEventListener('change', (event) => {
 function initDeliveryFields() {
   const deliveryTypeField = document.querySelector('.delivery-type-field');
   const deliveryLocationField = document.querySelector('[data-delivery-location-field]');
+  const deliveryAddressField = document.querySelector('[data-delivery-address-field]');
   const localitySelect = document.querySelector('[data-locality]');
   const sectorField = document.querySelector('[data-sector-field]');
   const customLocationField = document.querySelector('[data-custom-location-field]');
@@ -2711,7 +2761,9 @@ function initDeliveryFields() {
 
   function updateVisibility() {
     const deliveryType = getDeliveryType();
-    deliveryLocationField.hidden = deliveryType !== 'home_delivery';
+    const isHomeDelivery = deliveryType === 'home_delivery';
+    deliveryLocationField.hidden = !isHomeDelivery;
+    if (deliveryAddressField) deliveryAddressField.hidden = !isHomeDelivery;
 
     const locality = getSelectedLocality();
     sectorField.hidden = locality !== 'koparkhairne';
