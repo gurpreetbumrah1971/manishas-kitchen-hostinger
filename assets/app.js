@@ -1949,10 +1949,11 @@ document.addEventListener('submit', async (event) => {
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) {
-        if (result.notRegistered && panel) {
-          panel.dataset.walletMode = 'new';
+        if ((result.notRegistered || result.existingUser) && panel) {
+          const requiredMode = result.existingUser ? 'existing' : 'new';
+          panel.dataset.walletMode = requiredMode;
           try {
-            localStorage.setItem(CASHBACK_WALLET_MODE_KEY, 'new');
+            localStorage.setItem(CASHBACK_WALLET_MODE_KEY, requiredMode);
           } catch {
             // ignore storage errors
           }
@@ -1967,6 +1968,8 @@ document.addEventListener('submit', async (event) => {
         provider: result.provider || 'test',
         expiresAt: result.expiresAt,
         requestId,
+        intent: walletMode,
+        name: customerName,
       }));
       renderCheckout();
     } catch (error) {
@@ -2003,6 +2006,8 @@ document.addEventListener('submit', async (event) => {
           mobileNumber: normalizeMobileNumber(formData.get('mobile_number')),
           otp: formData.get('otp'),
           msg91RequestId,
+          intent: pending?.intent || 'existing',
+          name: pending?.name || '',
         }),
       });
       const result = await response.json().catch(() => ({}));
@@ -2380,7 +2385,7 @@ function showStaticOrderThankYou({ order, total, amount, paymentMethod, whatsapp
       <div class="cashback-earned-card">
         <span>Cashback for next order</span>
         <strong>${money(cashbackEarned)}</strong>
-          <p>Cashback from the eligible food bill has been added to your mobile wallet.</p>
+          <p>Cashback from the eligible food bill will be added to your mobile wallet after the order is confirmed.</p>
         ${cashbackRedeemed > 0 ? `<small>You redeemed ${money(cashbackRedeemed)} on this order.</small>` : ''}
       </div>
       <form class="special-day-save-form" data-special-day-save-form>
@@ -2466,6 +2471,12 @@ if (checkoutForm) checkoutForm.addEventListener('submit', async (event) => {
   const form = event.target;
   if (form && form.hasAttribute('data-static-checkout')) {
     event.preventDefault();
+    const customerAuth = getCustomerAuth();
+    if (!customerAuth) {
+      alert('Please log in with your mobile OTP before booking an order.');
+      document.querySelector('[data-cashback-panel]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
     const submitButton = form.querySelector('button[type="submit"]');
     const originalButtonText = submitButton && submitButton.textContent || 'Book Order';
     if (submitButton) {
@@ -2491,7 +2502,6 @@ if (checkoutForm) checkoutForm.addEventListener('submit', async (event) => {
     const grandTotal = parseMoney(checkoutTotalNode && checkoutTotalNode.textContent);
     const total = checkoutTotalNode && checkoutTotalNode.textContent || money(grandTotal);
     const items = cart.map((item) => `${item.name} x ${item.quantity}`).join(', ');
-    const customerAuth = getCustomerAuth();
     const walletPanel = document.querySelector('[data-cashback-panel]');
     const walletNumberInput = walletPanel && walletPanel.querySelector('[data-wallet-number]');
     const walletNameInput = walletPanel && walletPanel.querySelector('[name="customer_name"]');
@@ -2599,6 +2609,7 @@ if (checkoutForm) checkoutForm.addEventListener('submit', async (event) => {
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
+          Authorization: `Bearer ${customerAuth.token}`,
         },
         body: JSON.stringify(orderPayload),
       });
