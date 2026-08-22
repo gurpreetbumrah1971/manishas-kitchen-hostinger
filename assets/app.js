@@ -1570,9 +1570,10 @@ function renderCheckout() {
   const referralDiscount = referralDiscountForSubtotal(subtotal);
   const studentDiscount = studentDiscountForSubtotal(subtotal);
   const deliveryCharge = deliveryChargeForSubtotal(subtotal);
-  const preCashbackGrandTotal = subtotal + gst - discount - referralDiscount - studentDiscount + deliveryCharge;
-  const cashbackRedeemed = cashbackAppliedFor(preCashbackGrandTotal);
-  const grandTotal = Math.max(0, Number((preCashbackGrandTotal - cashbackRedeemed).toFixed(2)));
+  // Cashback can be redeemed only against the food bill. Delivery stays payable.
+  const foodBillBeforeCashback = subtotal + gst - discount - referralDiscount - studentDiscount;
+  const cashbackRedeemed = cashbackAppliedFor(foodBillBeforeCashback);
+  const grandTotal = Math.max(0, Number((foodBillBeforeCashback - cashbackRedeemed + deliveryCharge).toFixed(2)));
   document.querySelectorAll('[data-checkout-subtotal]').forEach((node) => node.textContent = money(subtotal));
   document.querySelectorAll('[data-checkout-gst]').forEach((node) => node.textContent = money(gst));
   document.querySelectorAll('[data-checkout-discount]').forEach((node) => node.textContent = money(discount));
@@ -1586,7 +1587,7 @@ function renderCheckout() {
   document.querySelectorAll('[data-delivery-nudge]').forEach((node) => node.textContent = deliveryNudgeForSubtotal(subtotal));
   document.querySelectorAll('[data-checkout-total], [data-upi-total]').forEach((node) => node.textContent = money(grandTotal));
   document.querySelectorAll('[data-cart-json]').forEach((node) => node.value = JSON.stringify(visibleCart));
-  renderCashbackPanel(preCashbackGrandTotal, cashbackRedeemed);
+  renderCashbackPanel(foodBillBeforeCashback, cashbackRedeemed);
   renderSavedAddressPicker();
   if (!target) return;
 
@@ -2379,7 +2380,7 @@ function showStaticOrderThankYou({ order, total, amount, paymentMethod, whatsapp
       <div class="cashback-earned-card">
         <span>Cashback for next order</span>
         <strong>${money(cashbackEarned)}</strong>
-        <p>10% of your final bill has been added to your mobile wallet.</p>
+          <p>10% of the eligible food bill has been added to your mobile wallet.</p>
         ${cashbackRedeemed > 0 ? `<small>You redeemed ${money(cashbackRedeemed)} on this order.</small>` : ''}
       </div>
       <form class="special-day-save-form" data-special-day-save-form>
