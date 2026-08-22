@@ -1,6 +1,6 @@
 (() => {
   let addressesByOrder = new Map();
-  let lastToken = '';
+  let isLoading = false;
 
   function apiUrl(path) {
     return new URL(`../api${path}`, window.location.href).toString();
@@ -51,8 +51,8 @@
 
   async function loadAddresses() {
     const token = localStorage.getItem('adminToken') || '';
-    if (!token || token === lastToken) return;
-    lastToken = token;
+    if (!token || isLoading) return;
+    isLoading = true;
     try {
       const response = await fetch(apiUrl('/admin/orders'), { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } });
       if (!response.ok) return;
@@ -67,7 +67,9 @@
       });
       refreshDisplay();
     } catch {
-      // The existing admin dashboard remains usable and retries after login.
+      // The existing admin dashboard remains usable and retries automatically.
+    } finally {
+      isLoading = false;
     }
   }
 
