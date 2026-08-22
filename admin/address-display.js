@@ -44,6 +44,19 @@
       value.style.cssText = 'margin:6px 0 0;color:#444;font-size:.8rem;line-height:1.35;white-space:pre-wrap';
       phoneLink.parentElement.parentElement?.append(value);
     });
+
+    document.querySelectorAll('.admin-history-order').forEach((orderRow) => {
+      if (orderRow.querySelector('[data-admin-order-address]')) return;
+      const orderNumber = String(orderRow.querySelector('button')?.textContent || '').trim();
+      const address = addressesByOrder.get(orderNumber);
+      if (!address) return;
+
+      const value = document.createElement('span');
+      value.dataset.adminOrderAddress = '';
+      value.textContent = `Address: ${address}`;
+      value.style.cssText = 'grid-column:1 / -1;color:#444;font-size:.85rem;line-height:1.35;white-space:pre-wrap';
+      orderRow.append(value);
+    });
   }
 
   function refreshDisplay() {
@@ -63,7 +76,9 @@
       addressesByNumber = new Map();
       orders.forEach((order) => {
         const address = String(order.address || '').trim();
-        if (!address || order.orderType !== 'DELIVERY') return;
+        // Older Home Delivery orders were mistakenly saved as Dine In. An
+        // entered address remains useful and must be visible to staff.
+        if (!address) return;
         addressesByOrder.set(order.orderNumber, address);
         const number = String(order.whatsappNumber || order.mobileNumber || '').replace(/\D/g, '').replace(/^91/, '');
         if (!number) return;
