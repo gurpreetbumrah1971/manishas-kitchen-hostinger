@@ -28,26 +28,44 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script>
-      var adminRouteIndex = window.location.pathname.toLowerCase().indexOf('/admin');
-      window.__ORDER_APP_BASE__ = adminRouteIndex >= 0
-        ? window.location.pathname.slice(0, adminRouteIndex + 1)
+      var pathSegments = window.location.pathname.split('/');
+      var adminSegmentIndex = pathSegments.findIndex(function (segment) {
+        return segment.toLowerCase() === 'admin';
+      });
+      window.__ORDER_APP_BASE__ = adminSegmentIndex >= 0
+        ? pathSegments.slice(0, adminSegmentIndex).join('/') + '/'
         : new URL('./', window.location.href).pathname;
       // The prebuilt admin bundle contains a few legacy root-relative links.
       // Keep them inside this deployment when it is hosted in a subfolder,
       // including nested routes such as /admin/lms.
+      function localLegacyPath(link) {
+        var href = link.getAttribute('href') || link.href || '';
+        try {
+          var parsed = new URL(href, window.location.href);
+          return parsed.origin === window.location.origin ? parsed.pathname : '';
+        } catch (_) {
+          return '';
+        }
+      }
+      function destinationForLegacyLink(link) {
+        var pathname = localLegacyPath(link);
+        if (pathname === '/menu.html' || pathname === '/checkout.html') {
+          return window.__ORDER_APP_BASE__ + pathname.slice(1);
+        }
+        return '';
+      }
       function rewriteLegacyLinks() {
         document.querySelectorAll('a[href]').forEach(function (link) {
-          var href = link.getAttribute('href');
-          if (href && /^\/(?:menu|checkout)\.html$/.test(href)) {
-            link.setAttribute('href', window.__ORDER_APP_BASE__ + href.slice(1));
-          }
+          var destination = destinationForLegacyLink(link);
+          if (destination) link.setAttribute('href', destination);
         });
       }
       document.addEventListener('click', function (event) {
-        var link = event.target.closest && event.target.closest('a[href^="/"]');
-        if (link && /^\/(?:menu|checkout)\.html$/.test(link.getAttribute('href'))) {
+        var link = event.target.closest && event.target.closest('a[href]');
+        var destination = link && destinationForLegacyLink(link);
+        if (destination) {
           event.preventDefault();
-          window.location.assign(window.__ORDER_APP_BASE__ + link.getAttribute('href').slice(1));
+          window.location.assign(destination);
         }
       }, true);
       new MutationObserver(rewriteLegacyLinks).observe(document.documentElement, { childList: true, subtree: true });
