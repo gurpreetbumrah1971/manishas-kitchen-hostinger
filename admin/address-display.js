@@ -31,18 +31,30 @@
   }
 
   function addAddressToLms() {
-    document.querySelectorAll('tr.admin-customer-row').forEach((row) => {
-      if (row.querySelector('[data-admin-delivery-address]')) return;
-      const phoneLink = row.querySelector('a[href^="https://wa.me/"]');
-      const number = String(phoneLink?.getAttribute('href') || '').replace(/\D/g, '').replace(/^91/, '');
-      const addresses = addressesByNumber.get(number);
-      if (!addresses?.length || !phoneLink?.parentElement) return;
+    document.querySelectorAll('.admin-customers-table thead tr').forEach((headerRow) => {
+      if (headerRow.querySelector('[data-admin-address-heading]')) return;
+      const heading = document.createElement('th');
+      heading.dataset.adminAddressHeading = '';
+      heading.textContent = 'Delivery Address';
+      heading.style.cssText = 'padding:1rem;min-width:220px';
+      headerRow.append(heading);
+    });
 
-      const value = document.createElement('p');
-      value.dataset.adminDeliveryAddress = '';
-      value.textContent = `Address: ${addresses.join(' • ')}`;
-      value.style.cssText = 'margin:6px 0 0;color:#444;font-size:.8rem;line-height:1.35;white-space:pre-wrap';
-      phoneLink.parentElement.parentElement?.append(value);
+    document.querySelectorAll('tr.admin-customer-row').forEach((row) => {
+      if (row.querySelector('[data-admin-lms-address]')) return;
+      const phoneLink = row.querySelector('a[href^="https://wa.me/"]');
+      const number = String(phoneLink?.getAttribute('href') || row.cells[2]?.textContent || '').replace(/\D/g, '').replace(/^91/, '');
+      const addresses = addressesByNumber.get(number);
+
+      const cell = document.createElement('td');
+      cell.dataset.adminLmsAddress = '';
+      cell.textContent = addresses?.length ? addresses.join('\n\n') : '—';
+      cell.style.cssText = 'padding:1rem;color:#444;font-size:.85rem;line-height:1.4;white-space:pre-wrap;vertical-align:top';
+      row.append(cell);
+    });
+
+    document.querySelectorAll('tr.admin-history-row .admin-history-cell').forEach((cell) => {
+      if (cell.colSpan < 12) cell.colSpan = 12;
     });
 
     document.querySelectorAll('.admin-history-order').forEach((orderRow) => {
