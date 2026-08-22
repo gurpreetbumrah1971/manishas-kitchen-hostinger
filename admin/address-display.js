@@ -1,6 +1,5 @@
 (() => {
   let addressesByOrder = new Map();
-  let addressesByNumber = new Map();
   let lastToken = '';
 
   function apiUrl(path) {
@@ -31,32 +30,6 @@
   }
 
   function addAddressToLms() {
-    document.querySelectorAll('.admin-customers-table thead tr').forEach((headerRow) => {
-      if (headerRow.querySelector('[data-admin-address-heading]')) return;
-      const heading = document.createElement('th');
-      heading.dataset.adminAddressHeading = '';
-      heading.textContent = 'Delivery Address';
-      heading.style.cssText = 'padding:1rem;min-width:220px';
-      headerRow.append(heading);
-    });
-
-    document.querySelectorAll('tr.admin-customer-row').forEach((row) => {
-      if (row.querySelector('[data-admin-lms-address]')) return;
-      const phoneLink = row.querySelector('a[href^="https://wa.me/"]');
-      const number = String(phoneLink?.getAttribute('href') || row.cells[2]?.textContent || '').replace(/\D/g, '').replace(/^91/, '');
-      const addresses = addressesByNumber.get(number);
-
-      const cell = document.createElement('td');
-      cell.dataset.adminLmsAddress = '';
-      cell.textContent = addresses?.length ? addresses.join('\n\n') : '—';
-      cell.style.cssText = 'padding:1rem;color:#444;font-size:.85rem;line-height:1.4;white-space:pre-wrap;vertical-align:top';
-      row.append(cell);
-    });
-
-    document.querySelectorAll('tr.admin-history-row .admin-history-cell').forEach((cell) => {
-      if (cell.colSpan < 12) cell.colSpan = 12;
-    });
-
     document.querySelectorAll('.admin-history-order').forEach((orderRow) => {
       if (orderRow.querySelector('[data-admin-order-address]')) return;
       const orderNumber = String(orderRow.querySelector('button')?.textContent || '').trim();
@@ -65,7 +38,7 @@
 
       const value = document.createElement('span');
       value.dataset.adminOrderAddress = '';
-      value.textContent = `Address: ${address}`;
+      value.textContent = `Delivery address for ${orderNumber}: ${address}`;
       value.style.cssText = 'grid-column:1 / -1;color:#444;font-size:.85rem;line-height:1.35;white-space:pre-wrap';
       orderRow.append(value);
     });
@@ -85,17 +58,12 @@
       if (!response.ok) return;
       const orders = await response.json();
       addressesByOrder = new Map();
-      addressesByNumber = new Map();
       orders.forEach((order) => {
         const address = String(order.address || '').trim();
         // Older Home Delivery orders were mistakenly saved as Dine In. An
         // entered address remains useful and must be visible to staff.
         if (!address) return;
         addressesByOrder.set(order.orderNumber, address);
-        const number = String(order.whatsappNumber || order.mobileNumber || '').replace(/\D/g, '').replace(/^91/, '');
-        if (!number) return;
-        const current = addressesByNumber.get(number) || [];
-        if (!current.includes(address)) addressesByNumber.set(number, [...current, address]);
       });
       refreshDisplay();
     } catch {
