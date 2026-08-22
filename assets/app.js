@@ -881,6 +881,20 @@ function getCustomLocation() {
   return input ? input.value.trim() : '';
 }
 
+function deliveryLocationLines(locality, sector, customLocation) {
+  const localityNames = {
+    koparkhairne: 'Koparkhairne',
+    bonkhode: 'Bonkhode',
+    ghansoli: 'Ghansoli',
+    vashi: 'Vashi',
+    other: 'Other',
+  };
+  const lines = [`Locality: ${localityNames[locality] || locality}`];
+  if (locality === 'koparkhairne' && sector) lines.push(`Sector: Sector ${sector}`);
+  if (locality === 'other' && customLocation) lines.push(`Area / Landmark: ${customLocation}`);
+  return lines;
+}
+
 function deliveryChargeForSubtotal(subtotal) {
   const deliveryType = getDeliveryType();
   
@@ -2499,6 +2513,9 @@ if (checkoutForm) checkoutForm.addEventListener('submit', async (event) => {
     const address = isHomeDelivery
       ? String((document.querySelector('[name="address"]') || {}).value || '').trim() || null
       : null;
+    const deliveryAddress = isHomeDelivery && address
+      ? [address, ...deliveryLocationLines(locality, sector, customLocation)].join('\n')
+      : null;
     const selectedAddressLabel = String((document.querySelector('[name="address_label"]') || {}).value || 'Home').trim();
     const customAddressLabel = String((document.querySelector('[name="custom_address_label"]') || {}).value || '').trim();
     const addressLabel = selectedAddressLabel === 'Custom' ? customAddressLabel : selectedAddressLabel;
@@ -2539,7 +2556,7 @@ if (checkoutForm) checkoutForm.addEventListener('submit', async (event) => {
       customerName,
       mobileNumber: number,
       whatsappNumber: number,
-      address,
+      address: deliveryAddress,
       studentInstitution: studentDiscountDetails().eligible ? studentDiscountDetails().institution : null,
       studentGrade: studentDiscountDetails().eligible ? studentDiscountDetails().grade : null,
       referralCode: appliedReferralCode() || null,
