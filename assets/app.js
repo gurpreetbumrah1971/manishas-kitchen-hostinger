@@ -1238,35 +1238,92 @@ function removeEmptyMenuCategories() {
   });
 }
 
-// The storefront menu markup is static HTML (not rendered from the database),
-// so an admin toggling a menu item's availability only changes the DB. This
-// syncs the live /api/menu availability onto the static cards after page load,
-// matching by name since the static markup's data-id values can drift from
-// the database's auto-increment ids after reseeds.
-async function syncMenuAvailability() {
-  const cards = [...document.querySelectorAll('[data-menu-item]')];
-  if (!cards.length) return;
+// The menu is owned by the database. Rendering it from /api/menu means the
+// customer always submits the same food-item ID, name and price the admin sees.
+const LEGACY_MENU_NAMES = new Map([
+  ['Egg Burji + 2 Pav (Single)', 'Single Egg Burjee + 2 Butter Pav'],
+  ['Egg Burji + 2 Pav (Double)', 'Double Egg Burjee + 4 Butter Pav'],
+  ['Egg Omelet + 2 Pav (Single)', 'Single Egg Omelet + 2 Butter Pav'],
+  ['Egg Omelet + 2 Pav (Double)', 'Double Omelet + 4 Butter Pav'],
+]);
 
-  let items;
-  try {
-    const response = await fetch(apiUrl('/menu'));
-    if (!response.ok) return;
-    items = await response.json();
-    if (!Array.isArray(items)) return;
-  } catch {
-    return;
-  }
+function menuCategoryOrder(left, right) {
+  const leftIndex = FRONTEND_CATEGORY_INDEX.has(left) ? FRONTEND_CATEGORY_INDEX.get(left) : Number.MAX_SAFE_INTEGER;
+  const rightIndex = FRONTEND_CATEGORY_INDEX.has(right) ? FRONTEND_CATEGORY_INDEX.get(right) : Number.MAX_SAFE_INTEGER;
+  return leftIndex - rightIndex || left.localeCompare(right);
+}
 
-  const availableNames = new Set(items.map((item) => String(item.name || '').trim().toLowerCase()));
+function syncCartWithMenu(items) {
+  const byName = new Map(items.map((item) => [String(item.name).trim().toLowerCase(), item]));
+  const cart = getCart();
+  const nextCart = cart.map((cartItem) => {
+    const currentName = LEGACY_MENU_NAMES.get(cartItem.name) || cartItem.name;
+    const item = byName.get(String(currentName || '').trim().toLowerCase());
+    return item ? {
+      ...cartItem,
+      id: Number(item.id),
+      name: item.name,
+      price: Number(item.price),
+      image: item.image,
+    } : null;
+  }).filter(Boolean);
+  if (JSON.stringify(cart) !== JSON.stringify(nextCart)) saveCart(nextCart);
+}
 
-  cards.forEach((card) => {
-    const name = categoryNameFromNode(card.querySelector('.menu-heading h3')).toLowerCase();
-    if (name && !availableNames.has(name)) card.remove();
+function renderDatabaseMenu(items) {
+  const categories = items.reduce((groups, item) => {
+    const name = item.category && item.category.name ? item.category.name : 'Menu';
+    groups.set(name, [...(groups.get(name) || []), item]);
+    return groups;
+  }, new Map());
+  const groups = [...categories.entries()].sort(([left], [right]) => menuCategoryOrder(left, right));
+
+  document.querySelectorAll('[data-menu-tabs]').forEach((tabGroup) => {
+    const tabs = tabGroup.querySelector('.menu-tabs');
+    if (!tabs) return;
+    tabs.replaceChildren();
+    tabGroup.querySelectorAll('[data-menu-panel]').forEach((panel) => panel.remove());
+    groups.forEach(([category, categoryItems], index) => {
+      const categoryId = String(categoryItems[0].categoryId);
+      const tab = document.createElement('button');
+      tab.className = `menu-tab${index === 0 ? ' active' : ''}`;
+      tab.type = 'button'; tab.role = 'tab'; tab.id = `menu-tab-${categoryId}`;
+      tab.dataset.menuTab = categoryId; tab.setAttribute('aria-controls', `menu-panel-${categoryId}`);
+      tab.setAttribute('aria-selected', index === 0 ? 'true' : 'false'); tab.textContent = category;
+      const panel = document.createElement('section');
+      panel.className = 'menu-tab-panel'; panel.id = `menu-panel-${categoryId}`; panel.role = 'tabpanel';
+      panel.dataset.menuPanel = categoryId; panel.setAttribute('aria-labelledby', tab.id); panel.hidden = index !== 0;
+      panel.innerHTML = `<div class="menu-grid">${categoryItems.map(menuCardHtml).join('')}</div>`;
+      tabs.appendChild(tab); tabGroup.appendChild(panel);
+    });
   });
 
-  removeEmptyMenuCategories();
-  ensureMenuSearchResults();
-  renderCartControls();
+  document.querySelectorAll('.menu-accordion-layout').forEach((layout) => {
+    layout.replaceChildren();
+    groups.forEach(([category, categoryItems], index) => {
+      const details = document.createElement('details');
+      details.className = 'menu-accordion'; details.open = index === 0;
+      details.innerHTML = `<summary>${escapeHtml(category)}</summary><div class="menu-grid">${categoryItems.map(menuCardHtml).join('')}</div>`;
+      layout.appendChild(details);
+    });
+  });
+}
+
+async function syncMenuFromDatabase() {
+  if (!document.querySelector('[data-menu-item]')) return;
+  try {
+    const response = await fetch(apiUrl('/menu'), { headers: { Accept: 'application/json' } });
+    const items = await response.json();
+    if (!response.ok || !Array.isArray(items)) return;
+    renderDatabaseMenu(items);
+    syncCartWithMenu(items);
+    ensureMenuSearchResults();
+    addCheeseAddons();
+    renderCartControls();
+    applyMenuFilters();
+  } catch {
+    // Preserve the server-rendered fallback if the menu API is temporarily unavailable.
+  }
 }
 
 function initAboutParallax() {
@@ -2824,11 +2881,6 @@ function initDeliveryFields() {
 initDeliveryFields();
 syncStudentDiscountFields();
 
-hydrateStaticMenuAdditions();
-normalizeStaticMenuCategories();
-moveMenuItemsToCategory(['Wada', 'Wada Pav'], 'Pakodas', 'Snacks');
-updateStaticMenuItemOverrides();
-addCheeseAddons();
 initAboutParallax();
 ensureMenuSearchResults();
 renderCartControls();
@@ -2839,7 +2891,7 @@ updateCartCount();
 syncPaymentBox();
 applyMenuFilters();
 restoreStaticOrderSession();
-syncMenuAvailability();
+syncMenuFromDatabase();
 showIndependenceBannerPopup();
 renderCheckout();
 
