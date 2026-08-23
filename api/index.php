@@ -67,15 +67,13 @@ function orderItemsFromPayload(array $items): array {
   if (!$items) throw new RuntimeException('Order items are required');
   $resolved=[];
   foreach ($items as $item) {
-    $id=(int)($item['foodItemId']??0); $name=trim(preg_replace('/\s*\+\s*(?:Extra )?Cheese\s*$/i','',(string)($item['name']??'')));
+    $name=trim(preg_replace('/\s*\+\s*(?:Extra )?Cheese\s*$/i','',(string)($item['name']??'')));
     $legacyNames=['Egg Burji + 2 Pav (Single)'=>'Single Egg Burjee + 2 Butter Pav','Egg Burji + 2 Pav (Double)'=>'Double Egg Burjee + 4 Butter Pav','Egg Omelet + 2 Pav (Single)'=>'Single Egg Omelet + 2 Butter Pav','Egg Omelet + 2 Pav (Double)'=>'Double Omelet + 4 Butter Pav'];
     $name=$legacyNames[$name]??$name;
-    // Static storefront pages can retain old numeric IDs after a database
-    // reseed. Resolve the displayed item name first, then use the ID only as
-    // a fallback only for clients that do not provide a name. Never use a
-    // mismatched stale ID when a named item cannot be found.
+    // Numeric IDs can become stale after a database reseed. Require a named
+    // menu item and resolve it server-side so a stale client can never turn
+    // one food item into a different item in the admin order.
     $food=$name?stmt('SELECT * FROM food_items WHERE name=? AND is_available=1',[$name])->fetch():false;
-    if (!$food && !$name && $id) $food=stmt('SELECT * FROM food_items WHERE id=? AND is_available=1',[$id])->fetch();
     if (!$food) throw new RuntimeException('An item in your cart is unavailable. Please refresh the menu.');
     $quantity=max(1,(int)($item['quantity']??1)); $price=(float)$food['price'];
     $resolved[]=['food'=>$food,'quantity'=>$quantity,'price'=>$price,'subtotal'=>round($quantity*$price,2)];
