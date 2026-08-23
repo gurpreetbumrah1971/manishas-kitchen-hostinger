@@ -340,51 +340,10 @@ function formatIstDateTime(value) {
   }).format(date) : '';
 }
 
-function upiPaymentConfig() {
-  const root = document.querySelector('[data-upi-payment]');
-  return {
-    upiId: ((root && root.dataset.upiId) || 'manishaskitchen2026@okaxis').trim(),
-  };
-}
-
-function buildUpiUrl() {
-  const { upiId } = upiPaymentConfig();
-  if (!upiId) return '#';
-  return `upi://pay?pa=${upiId}`;
-}
-
-function isIOSBrowser() {
-  return typeof navigator !== 'undefined' && /iPhone|iPad|iPod/i.test(navigator.userAgent || '');
-}
-
-function upiProviderLinks() {
-  const { upiId } = upiPaymentConfig();
-  const pa = encodeURIComponent(upiId);
-  return [
-    { label: 'Google Pay', href: `tez://upi/pay?pa=${pa}` },
-    { label: 'PhonePe', href: `phonepe://pay?pa=${pa}` },
-    { label: 'Paytm', href: `paytmmp://pay?pa=${pa}` },
-    { label: 'BHIM / Other UPI', href: `upi://pay?pa=${pa}` },
-  ];
-}
-
 function upiProviderButtons() {
-  // iOS has no OS-level chooser for a bare upi:// link like Android does -
-  // it just hands off to whichever single app has registered that scheme
-  // (usually WhatsApp), so list each UPI app's own scheme as separate buttons.
-  const payMarkup = isIOSBrowser()
-    ? `
-      <div class="upi-provider-grid">
-        ${upiProviderLinks().map((provider) => `
-          <a class="btn secondary upi-provider" href="${escapeHtml(provider.href)}" data-upi-link>${escapeHtml(provider.label)}</a>
-        `).join('')}
-      </div>
-    `
-    : `<a class="btn primary full upi-pay-btn" href="${escapeHtml(buildUpiUrl())}" data-upi-link>Pay</a>`;
   return `
-    ${payMarkup}
     <div class="upi-qr-card">
-      <p class="upi-qr-label">Or scan to pay with any UPI app</p>
+      <p class="upi-qr-label">Scan to pay with any UPI app</p>
       <img class="upi-qr-image" src="${projectAssetUrl('/assets/upi-qr.jpg')}" alt="Manisha's Kitchen UPI payment QR code" width="180" height="180">
       <a class="btn secondary upi-qr-download" href="${projectAssetUrl('/assets/upi-qr.jpg')}" download="manishas-kitchen-upi-qr.jpg">Download QR code</a>
     </div>
@@ -2434,12 +2393,13 @@ function showStaticOrderThankYou({ order, total, amount, paymentMethod, whatsapp
       ${shouldShowUpi ? `
         <div class="payment-box thank-you-payment">
           <h2>Pay with UPI</h2>
-          <p>Choose your preferred UPI app. When you return, this thank-you page and order status will still be here.</p>
+          <p>Scan the QR code below with any UPI app. When you return, this thank-you page and order status will still be here.</p>
           <div data-upi-payment data-locked="1">
             ${upiProviderButtons()}
           </div>
-          <p>UPI ID: <a href="upi://pay?pa=manishaskitchen2026@okaxis" data-upi-link><strong>manishaskitchen2026@okaxis</strong></a></p>
+          <p>UPI ID: <strong>manishaskitchen2026@okaxis</strong></p>
           <p>Order ID: <strong>${escapeHtml(orderNumber)}</strong></p>
+          <p class="upi-fallback-note">Seeing a "bank limit reached" error? That's your bank's daily UPI cap, not an issue with your order. Please pay cash on delivery/pickup instead, or <a href="https://wa.me/918879630082" target="_blank" rel="noopener">message us on WhatsApp</a> to arrange payment.</p>
         </div>
       ` : `
         <div class="payment-box thank-you-payment">
@@ -2637,6 +2597,9 @@ if (checkoutForm) checkoutForm.addEventListener('submit', async (event) => {
       studentGrade: studentDiscountDetails().eligible ? studentDiscountDetails().grade : null,
       referralCode: appliedReferralCode() || null,
       orderType: isHomeDelivery ? 'DELIVERY' : 'DINE_IN',
+      locality: isHomeDelivery ? locality : '',
+      sector: isHomeDelivery ? sector : '',
+      customLocation: isHomeDelivery ? customLocation : '',
       paymentMethod: formData.get('payment_method') || 'UPI',
       totalAmount: subtotal,
       gstAmount,
