@@ -442,6 +442,14 @@ function saveCustomerAuth(auth) {
   localStorage.setItem(CUSTOMER_AUTH_KEY, JSON.stringify(auth));
 }
 
+function expiredCustomerSessionError() {
+  // A token can become invalid after a deployment when the server secret or
+  // customer session changes. Do not leave the checkout looking logged in.
+  localStorage.removeItem(CUSTOMER_AUTH_KEY);
+  renderCheckout();
+  return new Error('Your login session has expired. Please verify your mobile OTP again before booking the order.');
+}
+
 function savedAddressesForCustomer() {
   const auth = getCustomerAuth();
   return auth && auth.customer && Array.isArray(auth.customer.savedAddresses) ? auth.customer.savedAddresses : [];
@@ -2658,6 +2666,7 @@ if (checkoutForm) checkoutForm.addEventListener('submit', async (event) => {
           body: JSON.stringify({ label: addressLabel, address }),
         });
         const savedAddressResult = await saveAddressResponse.json().catch(() => ({}));
+        if (saveAddressResponse.status === 401) throw expiredCustomerSessionError();
         if (!saveAddressResponse.ok) throw new Error(savedAddressResult.error || 'Could not save the address.');
         saveCustomerAuth({ token: customerAuth.token, expiresAt: customerAuth.expiresAt, customer: savedAddressResult.customer, transactions: savedAddressResult.transactions || [] });
       }
@@ -2671,6 +2680,7 @@ if (checkoutForm) checkoutForm.addEventListener('submit', async (event) => {
         body: JSON.stringify(orderPayload),
       });
       const result = await response.json().catch(() => ({}));
+      if (response.status === 401) throw expiredCustomerSessionError();
       if (!response.ok) {
         throw new Error(result.error || 'Failed to place order.');
       }
