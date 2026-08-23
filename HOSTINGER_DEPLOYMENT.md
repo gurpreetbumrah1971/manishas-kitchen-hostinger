@@ -2,6 +2,17 @@
 
 This is a PHP + MySQL build. It does not need Node.js, `package.json`, Prisma, PostgreSQL, or a continuously running process.
 
+## Release repository sync
+
+Every release must be pushed to both configured Git remotes before checking the
+online deployment:
+
+- `origin` — `manishas-kitchen-hostinger`
+- `deployment` — `manishas-kitchen-hostinger-clone` (the repository used by the online build)
+
+Push the same `main` commit to both remotes. A change that is only on `origin`
+will work locally but will not appear on the deployed website.
+
 ## Choose the PHP/HTML Git deployment option
 
 In hPanel, deploy this repository from **Websites → [your website] → Dashboard → Advanced → Git → Continue with GitHub**. Select the `main` branch and set the deployment directory to `public_html` (or the domain's configured document root).
