@@ -528,7 +528,8 @@ function studentDiscountDetails() {
   const selected = Boolean((document.querySelector('[data-student-discount-toggle]') || {}).checked);
   const institution = String((document.querySelector('[data-student-institution]') || {}).value || '').trim();
   const grade = String((document.querySelector('[data-student-grade]') || {}).value || '').trim();
-  return { institution, grade, eligible: selected && Boolean(institution && grade) };
+  const dineIn = getDeliveryType() === 'dine_in';
+  return { institution, grade, eligible: dineIn && selected && Boolean(institution && grade) };
 }
 
 function studentDiscountForSubtotal(subtotal) {
@@ -2784,6 +2785,11 @@ function syncStudentDiscountFields() {
   const toggle = document.querySelector('[data-student-discount-toggle]');
   if (!toggle) return;
 
+  const field = document.querySelector('[data-student-discount-field]');
+  const isDineIn = getDeliveryType() === 'dine_in';
+  if (field) field.hidden = !isDineIn;
+  if (!isDineIn && toggle.checked) toggle.checked = false;
+
   const isSelected = toggle.checked;
   document.querySelectorAll('[data-student-discount-details], [data-student-discount-note]').forEach((node) => {
     node.hidden = !isSelected;
@@ -2837,6 +2843,8 @@ function initDeliveryFields() {
       const customInput = document.querySelector('[data-custom-location]');
       if (customInput) customInput.value = '';
     }
+
+    syncStudentDiscountFields();
   }
 
   // Initial update
