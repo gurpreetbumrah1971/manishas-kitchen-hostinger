@@ -51,7 +51,7 @@ function wallet(int $id): array { $c=stmt('SELECT id,mobileNumber,name,birthday,
 function adminCustomer(int $id): array { $row=stmt('SELECT id,mobileNumber number,name,birthday,anniversary,referralCode referralCode,cashbackBalance,createdAt createdAt,updatedAt updatedAt FROM customer WHERE id=?',[$id])->fetch(); if(!$row) throw new RuntimeException('Customer not found'); $row['id']=(int)$row['id'];$row['cashbackBalance']=(float)$row['cashbackBalance'];$row['orders']=stmt('SELECT id,orderNumber,orderType,status,grandTotal,createdAt,address FROM `order` WHERE customerId=? ORDER BY createdAt DESC',[$id])->fetchAll();$row['deliveryAddresses']=stmt("SELECT address FROM `order` WHERE customerId=? AND address IS NOT NULL AND address<>'' GROUP BY address ORDER BY MAX(createdAt) DESC",[$id])->fetchAll(PDO::FETCH_COLUMN);$row['totalSpent']=array_sum(array_map(fn($order)=>(float)$order['grandTotal'],$row['orders']));$row['firstOrderAt']=count($row['orders'])?end($row['orders'])['createdAt']:null;$row['latestOrderAt']=count($row['orders'])?$row['orders'][0]['createdAt']:null;return $row; }
 function adminOrder(array $order): array {
   $order['id'] = (int)$order['id'];
-  foreach (['totalAmount','gstAmount','discountAmount','grandTotal','cashbackEarned','cashbackRedeemed'] as $key) if (isset($order[$key])) $order[$key] = (float)$order[$key];
+  foreach (['totalAmount','gstAmount','discountAmount','grandTotal','cashbackEarned','cashbackRedeemed','referralDiscount'] as $key) if (isset($order[$key])) $order[$key] = (float)$order[$key];
   if (isset($order['preparationMinutes'])) $order['preparationMinutes'] = (int)$order['preparationMinutes'];
   $items = stmt('SELECT oi.id,oi.foodItemId,oi.quantity,oi.unitPrice,oi.subtotal,f.name,f.image FROM orderitem oi JOIN fooditem f ON f.id=oi.foodItemId WHERE oi.orderId=?', [$order['id']])->fetchAll();
   $order['orderItems'] = array_map(function (array $item): array {
@@ -123,12 +123,53 @@ function createOrderFromRequest(array $b): never {
     $pdo->commit(); out(['id'=>$orderId,'orderNumber'=>$number,'grandTotal'=>$grand,'cashbackRedeemed'=>$redeemed,'cashbackEarned'=>$earned,'customerReferralCode'=>$customer['referralCode'],'referralApplied'=>(bool)$referrer,'customerSessionToken'=>$session,'customerSessionExpiresAt'=>date(DATE_ATOM,time()+1800)],201);
   } catch (Throwable $error) { if($pdo->inTransaction())$pdo->rollBack(); throw $error; }
 }
-function creditCashbackAfterConfirmation(int $orderId): void {
+function discountRateForSubtotal(float $subtotal): float {
+  // Mirrors assets/app.js's discountRateForSubtotal() and checkout.html's data-discount-tiers.
+  $tiers = ['1000' => 0.2, '800' => 0.15, '400' => 0.1];
+  $best = 0.0;
+  foreach ($tiers as $threshold => $rate) if ($subtotal >= (float)$threshold && $rate > $best) $best = $rate;
+  return $best;
+}
+function syncCashbackForOrder(int $orderId): void {
+  // Delta-based so it is safe to call both right after confirmation and again
+  // after later item additions increase cashbackEarned - it only ever tops up
+  // the difference, never re-credits what was already paid out.
   $order=stmt('SELECT * FROM `order` WHERE id=?',[$orderId])->fetch();
   if (!$order || empty($order['confirmedAt'])) return;
-  $alreadyCredited=(int)stmt("SELECT COUNT(*) FROM cashbacktransaction WHERE orderId=? AND type='EARNED' AND customerId=?",[$orderId,$order['customerId']])->fetchColumn();
-  if (!$alreadyCredited && (float)$order['cashbackEarned']>0) { $customer=stmt('SELECT cashbackBalance FROM customer WHERE id=?',[$order['customerId']])->fetch(); if ($customer) { $balance=money((float)$customer['cashbackBalance']+(float)$order['cashbackEarned']); stmt('UPDATE customer SET cashbackBalance=? WHERE id=?',[$balance,$order['customerId']]); stmt('INSERT INTO cashbacktransaction(customerId,orderId,type,amount,balanceAfter,note) VALUES(?,?,?,?,?,?)',[$order['customerId'],$orderId,'EARNED',(float)$order['cashbackEarned'],$balance,'Cashback credited after order confirmation '.$order['orderNumber']]); } }
-  if (!empty($order['referrerId'])) { $alreadyRewarded=(int)stmt("SELECT COUNT(*) FROM cashbacktransaction WHERE orderId=? AND type='EARNED' AND customerId=?",[$orderId,$order['referrerId']])->fetchColumn(); if (!$alreadyRewarded) { $reward=money((float)$order['grandTotal']*0.05); $referrer=stmt('SELECT cashbackBalance FROM customer WHERE id=?',[$order['referrerId']])->fetch(); if ($referrer && $reward>0) { $balance=money((float)$referrer['cashbackBalance']+$reward); stmt('UPDATE customer SET cashbackBalance=? WHERE id=?',[$balance,$order['referrerId']]); stmt('INSERT INTO cashbacktransaction(customerId,orderId,type,amount,balanceAfter,note) VALUES(?,?,?,?,?,?)',[$order['referrerId'],$orderId,'EARNED',$reward,$balance,'Referral cashback credited after order confirmation '.$order['orderNumber']]); } } }
+  $creditedSoFar=(float)stmt("SELECT COALESCE(SUM(amount),0) FROM cashbacktransaction WHERE orderId=? AND type='EARNED' AND customerId=?",[$orderId,$order['customerId']])->fetchColumn();
+  $due=money((float)$order['cashbackEarned']-$creditedSoFar);
+  if ($due>0 && $order['customerId']) { $customer=stmt('SELECT cashbackBalance FROM customer WHERE id=?',[$order['customerId']])->fetch(); if ($customer) { $balance=money((float)$customer['cashbackBalance']+$due); stmt('UPDATE customer SET cashbackBalance=? WHERE id=?',[$balance,$order['customerId']]); stmt('INSERT INTO cashbacktransaction(customerId,orderId,type,amount,balanceAfter,note) VALUES(?,?,?,?,?,?)',[$order['customerId'],$orderId,'EARNED',$due,$balance,'Cashback credited for order '.$order['orderNumber']]); } }
+  if (!empty($order['referrerId'])) { $rewardDue=money((float)$order['grandTotal']*0.05); $referrerCreditedSoFar=(float)stmt("SELECT COALESCE(SUM(amount),0) FROM cashbacktransaction WHERE orderId=? AND type='EARNED' AND customerId=?",[$orderId,$order['referrerId']])->fetchColumn(); $referrerDue=money($rewardDue-$referrerCreditedSoFar); if ($referrerDue>0) { $referrer=stmt('SELECT cashbackBalance FROM customer WHERE id=?',[$order['referrerId']])->fetch(); if ($referrer) { $balance=money((float)$referrer['cashbackBalance']+$referrerDue); stmt('UPDATE customer SET cashbackBalance=? WHERE id=?',[$balance,$order['referrerId']]); stmt('INSERT INTO cashbacktransaction(customerId,orderId,type,amount,balanceAfter,note) VALUES(?,?,?,?,?,?)',[$order['referrerId'],$orderId,'EARNED',$referrerDue,$balance,'Referral cashback credited for order '.$order['orderNumber']]); } } }
+}
+function addItemsToOrder(string $orderNumber, array $b): never {
+  $identity=auth('customer');
+  $order=stmt('SELECT * FROM `order` WHERE orderNumber=? AND customerId=?',[$orderNumber,(int)$identity['id']])->fetch();
+  if (!$order) out(['error'=>'Order not found'],404);
+  if ($order['orderType']!=='DINE_IN') out(['error'=>'Only dine-in orders can be updated after booking.'],422);
+  if (in_array($order['status'],['DELIVERED','CANCELLED'],true)) out(['error'=>'This order can no longer be updated.'],422);
+  $newItems=orderItemsFromPayload($b['items']??[]);
+  $pdo=db(); $pdo->beginTransaction();
+  try {
+    foreach ($newItems as $item) stmt('INSERT INTO orderitem(orderId,foodItemId,quantity,unitPrice,subtotal) VALUES(?,?,?,?,?)',[$order['id'],$item['food']['id'],$item['quantity'],$item['price'],$item['subtotal']]);
+    // The final food value across the whole order (not just the new items) decides which discount tier applies.
+    $subtotal=money((float)stmt('SELECT COALESCE(SUM(subtotal),0) FROM orderitem WHERE orderId=?',[$order['id']])->fetchColumn());
+    $gst=money($subtotal*0.05);
+    $tierDiscount=money($subtotal*discountRateForSubtotal($subtotal));
+    $referralDiscount=!empty($order['referrerId'])?money($subtotal*0.05):0;
+    $studentEligible=trim((string)($b['studentInstitution']??''))!=='' && trim((string)($b['studentGrade']??''))!=='';
+    $studentDiscount=$studentEligible?money($subtotal*0.10):0;
+    $discount=money($tierDiscount+$referralDiscount+$studentDiscount);
+    $beforeCashback=money($subtotal+$gst-$discount);
+    $redeemed=(float)$order['cashbackRedeemed'];
+    $foodBillAfterCashback=money(max(0,$beforeCashback-$redeemed));
+    $cashbackRate=!empty($order['referrerId'])?0.05:0.10;
+    $earned=money($foodBillAfterCashback*$cashbackRate);
+    $grand=$foodBillAfterCashback; // Dine-in never carries a delivery charge.
+    stmt('UPDATE `order` SET totalAmount=?,gstAmount=?,discountAmount=?,referralDiscount=?,cashbackEarned=?,grandTotal=? WHERE id=?',[$subtotal,$gst,$discount,$referralDiscount,$earned,$grand,$order['id']]);
+    syncCashbackForOrder($order['id']);
+    $pdo->commit();
+    out(adminOrder(stmt('SELECT * FROM `order` WHERE id=?',[$order['id']])->fetch()));
+  } catch (Throwable $error) { if($pdo->inTransaction())$pdo->rollBack(); throw $error; }
 }
 function msg91Enabled(): bool { return OTP_PROVIDER === 'msg91' && MSG91_WIDGET_ID !== '' && MSG91_TOKEN_AUTH !== ''; }
 function verifyMsg91Otp(string $otp, string $requestId): void {
@@ -158,6 +199,8 @@ try {
   if ($p==='health') out(['status'=>'ok','runtime'=>'php-mysql']);
   if ($p==='customer/otp-config' && $m==='GET') { if(!msg91Enabled()) out(['error'=>'MSG91 OTP is not configured. Set MSG91_WIDGET_ID and MSG91_TOKEN_AUTH.'],503); out(['widgetId'=>MSG91_WIDGET_ID,'tokenAuth'=>MSG91_TOKEN_AUTH,'captchaRenderId'=>'']); }
   if ($p==='orders' && $m==='POST') createOrderFromRequest(body());
+  if (preg_match('#^orders/([^/]+)/items$#',$p,$x) && $m==='PATCH') addItemsToOrder($x[1],body());
+  if (preg_match('#^orders/([^/]+)$#',$p,$x) && $m==='GET') { $identity=auth('customer'); $order=stmt('SELECT * FROM `order` WHERE orderNumber=? AND customerId=?',[$x[1],(int)$identity['id']])->fetch(); if (!$order) out(['error'=>'Order not found'],404); out(adminOrder($order)); }
   if ($p==='admin/login' && $m==='POST') { defaultAdmin(); $b=body(); $a=stmt('SELECT * FROM admin WHERE username=?',[trim($b['username']??'')])->fetch(); if (!$a || !password_verify((string)($b['password']??''),$a['password'])) out(['error'=>'Invalid credentials'],401); $exp=date(DATE_ATOM,time()+1800); out(['token'=>token(['type'=>'admin','id'=>(int)$a['id'],'username'=>$a['username']],1800),'username'=>$a['username'],'expiresAt'=>$exp]); }
   if ($p==='categories' && $m==='GET') { $rows=stmt('SELECT c.*,COUNT(f.id) foodCount FROM category c LEFT JOIN fooditem f ON f.categoryId=c.id AND f.isAvailable=1 GROUP BY c.id ORDER BY FIELD(c.name,"Parathas","Frankies","Kebabs","Pakodas","Egg Dishes","Snacks","Beverages")')->fetchAll(); foreach($rows as &$r){$r['id']=(int)$r['id'];$r['image']=projectUrl((string)($r['image'] ?? ''));$r['_count']=['foodItems'=>(int)$r['foodCount']];unset($r['foodCount']);} out($rows); }
   if ($p==='menu' && $m==='GET') { $sql='SELECT f.*,c.name categoryName FROM fooditem f JOIN category c ON c.id=f.categoryId'; $q=[]; $where=[]; if (!isset($_GET['admin'])) $where[]='f.isAvailable=1'; if (!empty($_GET['categoryId'])) {$where[]='f.categoryId=?';$q[]=(int)$_GET['categoryId'];} if($where)$sql.=' WHERE '.implode(' AND ',$where); $sql.=' ORDER BY f.id'; $rows=stmt($sql,$q)->fetchAll(); out(array_map('menuRow',$rows)); }
@@ -184,7 +227,7 @@ try {
   if ($p==='admin/orders' && $m==='GET') {auth('admin');$orders=stmt('SELECT * FROM `order` ORDER BY createdAt DESC')->fetchAll();out(array_map('adminOrder',$orders));}
   if ($p==='admin/export/orders' && $m==='GET') {auth('admin');header('Content-Type: text/csv; charset=utf-8');header('Content-Disposition: attachment; filename="orders-export-'.date('Y-m-d').'.csv"');$out=fopen('php://output','w');fputcsv($out,['Order ID','Order Number','Timestamp','Customer','Mobile','WhatsApp','Address','Table','Subtotal','GST','Discount','Cashback Redeemed','Cashback Earned','Grand Total','Status','Order Type','Payment Method']);$orders=stmt('SELECT id,orderNumber,createdAt,customerName,mobileNumber,whatsappNumber,address,tableNumber,totalAmount,gstAmount,discountAmount,cashbackRedeemed,cashbackEarned,grandTotal,status,orderType,paymentMethod FROM `order` ORDER BY createdAt DESC')->fetchAll();foreach($orders as $o){fputcsv($out,[$o['id'],$o['orderNumber'],$o['createdAt'],$o['customerName'],$o['mobileNumber'],$o['whatsappNumber'],$o['address'],$o['tableNumber'],$o['totalAmount'],$o['gstAmount'],$o['discountAmount'],$o['cashbackRedeemed'],$o['cashbackEarned'],$o['grandTotal'],$o['status'],$o['orderType'],$o['paymentMethod']]);}fclose($out);exit;}
   if ($p==='admin/export/customers' && $m==='GET') {auth('admin');header('Content-Type: text/csv; charset=utf-8');header('Content-Disposition: attachment; filename="lms-customers-export-'.date('Y-m-d').'.csv"');$out=fopen('php://output','w');fputcsv($out,['Customer ID','Name','Mobile Number','Birthday','Anniversary','Referral Code','Cashback Balance','Order Count','Total Spent','First Order','Last Order','Created At']);$customers=stmt('SELECT c.id,c.name,c.mobileNumber,c.birthday,c.anniversary,c.referralCode,c.cashbackBalance,c.createdAt,COUNT(o.id) orderCount,COALESCE(SUM(o.grandTotal),0) totalSpent,MIN(o.createdAt) firstOrder,MAX(o.createdAt) lastOrder FROM customer c LEFT JOIN `order` o ON o.customerId=c.id GROUP BY c.id ORDER BY c.updatedAt DESC')->fetchAll();foreach($customers as $c){fputcsv($out,[$c['id'],$c['name'] ?? '',$c['mobileNumber'],$c['birthday'],$c['anniversary'],$c['referralCode'],$c['cashbackBalance'],$c['orderCount'],$c['totalSpent'],$c['firstOrder'],$c['lastOrder'],$c['createdAt']]);}fclose($out);exit;}
-  if (preg_match('#^admin/orders/(\d+)/status$#',$p,$x)&&$m==='PATCH') {auth('admin');$b=body();$a=strtoupper($b['action']??$b['status']??'');$map=['CONFIRM'=>null,'CONFIRMED'=>null,'PREPARING'=>'PREPARING','READY'=>'COMPLETED','COMPLETED'=>'COMPLETED','DELIVERED'=>'DELIVERED','CANCELLED'=>'CANCELLED'];if(!array_key_exists($a,$map))out(['error'=>'Invalid order action'],400);$sets=[];if($a==='CONFIRM'||$a==='CONFIRMED')$sets[]='confirmedAt=COALESCE(confirmedAt,NOW())';if($map[$a])$sets[]='status='.db()->quote($map[$a]);if($a==='PREPARING'){$sets[]='preparationStartedAt=NOW()';$sets[]='preparationMinutes='.(int)max(1,min(180,$b['preparationMinutes']??1));}if($a==='READY'||$a==='COMPLETED')$sets[]='readyAt=NOW()';if($a==='DELIVERED')$sets[]='deliveredAt=NOW()';if($sets)stmt('UPDATE `order` SET '.implode(',',$sets).' WHERE id=?',[(int)$x[1]]);if($a==='CONFIRM'||$a==='CONFIRMED')creditCashbackAfterConfirmation((int)$x[1]);out(adminOrder(stmt('SELECT * FROM `order` WHERE id=?',[(int)$x[1]])->fetch()));}
+  if (preg_match('#^admin/orders/(\d+)/status$#',$p,$x)&&$m==='PATCH') {auth('admin');$b=body();$a=strtoupper($b['action']??$b['status']??'');$map=['CONFIRM'=>null,'CONFIRMED'=>null,'PREPARING'=>'PREPARING','READY'=>'COMPLETED','COMPLETED'=>'COMPLETED','DELIVERED'=>'DELIVERED','CANCELLED'=>'CANCELLED'];if(!array_key_exists($a,$map))out(['error'=>'Invalid order action'],400);$sets=[];if($a==='CONFIRM'||$a==='CONFIRMED')$sets[]='confirmedAt=COALESCE(confirmedAt,NOW())';if($map[$a])$sets[]='status='.db()->quote($map[$a]);if($a==='PREPARING'){$sets[]='preparationStartedAt=NOW()';$sets[]='preparationMinutes='.(int)max(1,min(180,$b['preparationMinutes']??1));}if($a==='READY'||$a==='COMPLETED')$sets[]='readyAt=NOW()';if($a==='DELIVERED')$sets[]='deliveredAt=NOW()';if($sets)stmt('UPDATE `order` SET '.implode(',',$sets).' WHERE id=?',[(int)$x[1]]);if($a==='CONFIRM'||$a==='CONFIRMED')syncCashbackForOrder((int)$x[1]);out(adminOrder(stmt('SELECT * FROM `order` WHERE id=?',[(int)$x[1]])->fetch()));}
   if (preg_match('#^admin/orders/(\d+)$#',$p,$x)&&$m==='DELETE') {auth('admin');$id=(int)$x[1];$pdo=db();$pdo->beginTransaction();try{$order=stmt('SELECT customerId,referrerId FROM `order` WHERE id=?',[$id])->fetch();if(!$order)out(['error'=>'Order not found'],404);$affected=array_unique(array_filter([(int)$order['customerId'],(int)$order['referrerId']]));stmt('DELETE FROM cashbacktransaction WHERE orderId=?',[$id]);stmt('DELETE FROM `order` WHERE id=?',[$id]);foreach($affected as $customerId){$balance=(float)stmt("SELECT COALESCE(SUM(CASE WHEN type='REDEEMED' THEN -amount ELSE amount END),0) FROM cashbacktransaction WHERE customerId=?",[$customerId])->fetchColumn();stmt('UPDATE customer SET cashbackBalance=? WHERE id=?',[$balance,$customerId]);}$pdo->commit();out(['deleted'=>true]);}catch(Throwable $e){if($pdo->inTransaction())$pdo->rollBack();throw $e;}}
   out(['error'=>'Route not found'],404);
 } catch(Throwable $e) { error_log('Order app API: '.$e->getMessage()); if($e instanceof RuntimeException) out(['error'=>$e->getMessage()],422); out(['error'=>'Server error. Check database configuration and server error log.'],500); }

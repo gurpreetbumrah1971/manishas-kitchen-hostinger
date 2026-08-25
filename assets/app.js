@@ -6,6 +6,7 @@ const CUSTOMER_AUTH_KEY = 'mkCustomerAuth';
 const CASHBACK_REDEEM_KEY = 'mkCashbackRedeem';
 const CASHBACK_OTP_KEY = 'mkCashbackOtp';
 const CASHBACK_WALLET_MODE_KEY = 'mkCashbackWalletMode';
+const ADD_TO_ORDER_KEY = 'mkAddToOrder';
 // Build URLs relative to this project's folder. This supports both a
 // Hostinger document root and local XAMPP projects whose directory has a name.
 const APP_BASE_URL = document.currentScript && document.currentScript.src
@@ -375,6 +376,33 @@ function getActiveOrderSession() {
 
 function saveOrderSession(session) {
   localStorage.setItem(ORDER_SESSION_KEY, JSON.stringify(session));
+}
+
+function getAddToOrderFlag() {
+  try {
+    const flag = JSON.parse(localStorage.getItem(ADD_TO_ORDER_KEY) || 'null');
+    return flag && flag.orderNumber ? flag : null;
+  } catch {
+    localStorage.removeItem(ADD_TO_ORDER_KEY);
+    return null;
+  }
+}
+
+function setAddToOrderFlag(orderNumber) {
+  localStorage.setItem(ADD_TO_ORDER_KEY, JSON.stringify({ orderNumber, startedAt: new Date().toISOString() }));
+}
+
+function clearAddToOrderFlag() {
+  localStorage.removeItem(ADD_TO_ORDER_KEY);
+}
+
+async function fetchOrderDetails(orderNumber, token) {
+  const response = await fetch(apiUrl(`/orders/${encodeURIComponent(orderNumber)}`), {
+    headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || 'Could not load this order.');
+  return result;
 }
 
 function normalizeMobileNumber(value) {
@@ -1588,16 +1616,23 @@ function renderCheckout() {
   }
   const visibleCart = cart;
   const removedCount = 0;
-  const subtotal = visibleCart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const cartSubtotal = visibleCart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  // When adding items to an already-booked dine-in order, discounts apply to
+  // the combined food value (what was already ordered plus these new items).
+  const subtotal = cartSubtotal + (addToOrderBaseline ? Number(addToOrderBaseline.totalAmount || 0) : 0);
   const gst = Number((subtotal * gstRate).toFixed(2));
   const discountRate = discountRateForSubtotal(subtotal, discountTiers);
   const discount = Number((subtotal * discountRate).toFixed(2));
-  const referralDiscount = referralDiscountForSubtotal(subtotal);
+  const referralDiscount = addToOrderBaseline
+    ? (Number(addToOrderBaseline.referralDiscount || 0) > 0 ? Number((subtotal * 0.05).toFixed(2)) : 0)
+    : referralDiscountForSubtotal(subtotal);
   const studentDiscount = studentDiscountForSubtotal(subtotal);
   const deliveryCharge = deliveryChargeForSubtotal(subtotal);
   // Cashback can be redeemed only against the food bill. Delivery stays payable.
   const foodBillBeforeCashback = subtotal + gst - discount - referralDiscount - studentDiscount;
-  const cashbackRedeemed = cashbackAppliedFor(foodBillBeforeCashback);
+  const cashbackRedeemed = addToOrderBaseline
+    ? Number(addToOrderBaseline.cashbackRedeemed || 0)
+    : cashbackAppliedFor(foodBillBeforeCashback);
   const grandTotal = Math.max(0, Number((foodBillBeforeCashback - cashbackRedeemed + deliveryCharge).toFixed(2)));
   document.querySelectorAll('[data-checkout-subtotal]').forEach((node) => node.textContent = money(subtotal));
   document.querySelectorAll('[data-checkout-gst]').forEach((node) => node.textContent = money(gst));
@@ -2222,6 +2257,7 @@ function specialDayFieldsHtml(customer) {
 let orderStatusPollTimer = null;
 let orderCountdownTimer = null;
 let latestOrderStatus = null;
+let addToOrderBaseline = null;
 
 function clearOrderStatusTimers() {
   if (orderStatusPollTimer) {
@@ -2318,6 +2354,12 @@ function updateOrderStatusPanel(status) {
   label.dataset.status = status && status.statusLabel || 'PENDING';
   message.textContent = statusMessage(status);
   updateOrderStatusSteps(status);
+  const addMoreFoodLink = document.querySelector('[data-add-more-food]');
+  if (addMoreFoodLink) {
+    addMoreFoodLink.hidden = !status
+      || status.orderType !== 'DINE_IN'
+      || ['DELIVERED', 'CANCELLED'].includes(status.status);
+  }
   if (updated) {
     updated.textContent = status
       ? `Updated ${formatIstTime(new Date())} IST`
@@ -2389,7 +2431,7 @@ function showStaticOrderThankYou({ order, total, amount, paymentMethod, whatsapp
       <p class="order-received-at">Received: ${escapeHtml(receivedAt)} IST</p>
       <div class="thank-you-total">
         <span>Total Amount</span>
-        <strong>${escapeHtml(total)}</strong>
+        <strong data-thank-you-total>${escapeHtml(total)}</strong>
       </div>
       ${shouldShowUpi ? `
         <div class="payment-box thank-you-payment">
@@ -2410,7 +2452,7 @@ function showStaticOrderThankYou({ order, total, amount, paymentMethod, whatsapp
       `}
       <div class="cashback-earned-card">
         <span>Cashback for next order</span>
-        <strong>${money(cashbackEarned)}</strong>
+        <strong data-thank-you-cashback>${money(cashbackEarned)}</strong>
           <p>Cashback from the eligible food bill will be added to your mobile wallet after the order is confirmed.</p>
         ${cashbackRedeemed > 0 ? `<small>You redeemed ${money(cashbackRedeemed)} on this order.</small>` : ''}
       </div>
@@ -2452,13 +2494,50 @@ function showStaticOrderThankYou({ order, total, amount, paymentMethod, whatsapp
         </div>
         <span class="order-status-meta" data-order-status-updated>Checking status...</span>
       </div>
+      <div class="order-items-card" data-order-items-card>
+        <h2>Items in this order</h2>
+        <div class="order-items-list" data-order-items-list><p class="cashback-empty">Loading order items...</p></div>
+      </div>
+      <a class="btn secondary full" data-add-more-food hidden href="${pageUrl('menu.html')}">Add More Food to This Order</a>
       <a class="btn secondary" href="${pageUrl('menu.html')}">Back to Menu</a>
     </div>
   `;
 
   window.scrollTo(0, 0);
   section.querySelectorAll('[data-date-group]').forEach(bindDateGroup);
+  loadOrderItemsForThankYou(section, orderNumber);
+  const addMoreFoodLink = section.querySelector('[data-add-more-food]');
+  if (addMoreFoodLink) {
+    addMoreFoodLink.addEventListener('click', () => setAddToOrderFlag(orderNumber));
+  }
   if (session) startOrderStatusTracking(session);
+}
+
+async function loadOrderItemsForThankYou(section, orderNumber) {
+  const list = section.querySelector('[data-order-items-list]');
+  if (!list) return;
+  const customerAuth = getCustomerAuth();
+  if (!customerAuth) {
+    list.innerHTML = '<p class="cashback-empty">Log in to view items in this order.</p>';
+    return;
+  }
+  try {
+    const order = await fetchOrderDetails(orderNumber, customerAuth.token);
+    renderOrderItemsList(list, order.orderItems || []);
+  } catch {
+    list.innerHTML = '<p class="cashback-empty">Could not load items for this order.</p>';
+  }
+}
+
+function renderOrderItemsList(list, orderItems) {
+  list.innerHTML = orderItems.length
+    ? orderItems.map((item) => `
+      <div class="order-items-row">
+        <span>${escapeHtml(item.foodItem && item.foodItem.name || 'Item')} x ${Number(item.quantity)}</span>
+        <span>${money(item.subtotal)}</span>
+      </div>
+    `).join('')
+    : '<p class="cashback-empty">No items found for this order.</p>';
 }
 
 function restoreStaticOrderSession() {
@@ -2501,6 +2580,10 @@ if (checkoutForm) checkoutForm.addEventListener('submit', async (event) => {
     if (!customerAuth) {
       alert('Please log in with your mobile OTP before booking an order.');
       document.querySelector('[data-cashback-panel]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    if (addToOrderBaseline) {
+      await submitAddToOrder(form, cart, customerAuth);
       return;
     }
     const submitButton = form.querySelector('button[type="submit"]');
@@ -2698,6 +2781,159 @@ if (checkoutForm) checkoutForm.addEventListener('submit', async (event) => {
   }
 });
 
+async function submitAddToOrder(form, cart, customerAuth) {
+  const orderNumber = addToOrderBaseline.orderNumber;
+  const submitButton = form.querySelector('button[type="submit"]');
+  const originalText = submitButton && submitButton.textContent || 'Add to Order';
+  if (submitButton) {
+    submitButton.disabled = true;
+    submitButton.textContent = 'Adding Items...';
+  }
+  try {
+    const studentEligible = studentDiscountDetails().eligible;
+    const response = await fetch(apiUrl(`/orders/${encodeURIComponent(orderNumber)}/items`), {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        Authorization: `Bearer ${customerAuth.token}`,
+      },
+      body: JSON.stringify({
+        items: cart.map((item) => ({ foodItemId: Number(item.id), name: item.name, quantity: Number(item.quantity || 1) })),
+        studentInstitution: studentEligible ? studentDiscountDetails().institution : null,
+        studentGrade: studentEligible ? studentDiscountDetails().grade : null,
+      }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (response.status === 401) throw expiredCustomerSessionError();
+    if (!response.ok) throw new Error(result.error || 'Could not add items to your order.');
+
+    const activeSession = getActiveOrderSession();
+    if (activeSession && activeSession.orderNumber === orderNumber) {
+      saveOrderSession({
+        ...activeSession,
+        total: money(result.grandTotal),
+        amount: result.grandTotal,
+        cashbackEarned: result.cashbackEarned,
+        cashbackRedeemed: result.cashbackRedeemed,
+      });
+    }
+
+    clearCartStorage();
+    clearAddToOrderFlag();
+    addToOrderBaseline = null;
+    window.location.href = pageUrl('checkout.html');
+  } catch (error) {
+    alert(error.message || 'Could not add items to your order.');
+    if (submitButton) {
+      submitButton.disabled = false;
+      submitButton.textContent = originalText;
+    }
+  }
+}
+
+async function initAddToOrderMode() {
+  if (!document.querySelector('.checkout-page')) return;
+  const flag = getAddToOrderFlag();
+  if (!flag || !getCart().length) return;
+  const customerAuth = getCustomerAuth();
+  if (!customerAuth) {
+    clearAddToOrderFlag();
+    return;
+  }
+
+  let order;
+  try {
+    order = await fetchOrderDetails(flag.orderNumber, customerAuth.token);
+  } catch {
+    clearAddToOrderFlag();
+    return;
+  }
+  if (order.orderType !== 'DINE_IN' || ['DELIVERED', 'CANCELLED'].includes(order.status)) {
+    clearAddToOrderFlag();
+    alert('This order can no longer be updated. You can place a new order instead.');
+    return;
+  }
+
+  addToOrderBaseline = order;
+
+  document.querySelector('.delivery-type-field')?.setAttribute('hidden', '');
+  document.querySelector('[data-delivery-location-field]')?.setAttribute('hidden', '');
+  document.querySelector('[data-delivery-address-field]')?.setAttribute('hidden', '');
+  document.querySelector('.delivery-note')?.setAttribute('hidden', '');
+  document.querySelector('[data-cashback-panel]')?.setAttribute('hidden', '');
+  document.querySelector('.discount-offer')?.setAttribute('hidden', '');
+  document.querySelector('.referral-field')?.setAttribute('hidden', '');
+  const existingAddMoreLink = document.querySelector('.checkout-summary > a[href="menu.html"]');
+  if (existingAddMoreLink) existingAddMoreLink.hidden = true;
+
+  const heading = document.querySelector('.checkout-page .section.compact > h1');
+  if (heading) heading.textContent = `Add Items to Order #${order.orderNumber}`;
+
+  const summaryCard = document.querySelector('.checkout-summary');
+  const itemsTarget = document.querySelector('[data-checkout-items]');
+  if (summaryCard && itemsTarget && !summaryCard.querySelector('.add-order-baseline-note')) {
+    const note = document.createElement('p');
+    note.className = 'add-order-baseline-note';
+    const itemCount = (order.orderItems || []).length;
+    note.textContent = `Already ordered: ${itemCount} item${itemCount === 1 ? '' : 's'} · ${money(order.totalAmount)} food subtotal so far. Totals below include this order.`;
+    itemsTarget.insertAdjacentElement('afterend', note);
+  }
+
+  const paymentLabel = document.querySelector('[data-payment-method]')?.closest('label');
+  if (paymentLabel) paymentLabel.hidden = true;
+
+  const submitButton = document.querySelector('[data-checkout-form] button[type="submit"]');
+  if (submitButton) submitButton.textContent = 'Add to Order';
+
+  const formCard = document.querySelector('.form-card');
+  if (formCard && !formCard.querySelector('[data-add-to-order-cancel]')) {
+    const cancelButton = document.createElement('button');
+    cancelButton.type = 'button';
+    cancelButton.className = 'btn secondary full';
+    cancelButton.dataset.addToOrderCancel = '';
+    cancelButton.textContent = 'Cancel';
+    cancelButton.addEventListener('click', () => {
+      clearCartStorage();
+      clearAddToOrderFlag();
+      window.location.href = pageUrl('checkout.html');
+    });
+    formCard.appendChild(cancelButton);
+  }
+
+  renderCheckout();
+}
+
+function renderAddToOrderBanner() {
+  if (!document.querySelector('.menu-page')) return;
+  const flag = getAddToOrderFlag();
+  const main = document.querySelector('main');
+  if (!main) return;
+  let banner = document.querySelector('[data-add-to-order-banner]');
+  if (!flag) {
+    if (banner) banner.remove();
+    return;
+  }
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.className = 'add-to-order-banner';
+    banner.dataset.addToOrderBanner = '';
+    main.insertAdjacentElement('afterbegin', banner);
+  }
+  banner.innerHTML = `<span>Adding items to Order #${escapeHtml(flag.orderNumber)}. Add items to your cart, then go to Your Order to confirm.</span>`;
+  const cancelButton = document.createElement('button');
+  cancelButton.type = 'button';
+  cancelButton.textContent = 'Cancel';
+  cancelButton.addEventListener('click', () => {
+    clearCartStorage();
+    clearAddToOrderFlag();
+    banner.remove();
+    updateCartCount();
+    renderCartControls();
+  });
+  banner.appendChild(cancelButton);
+}
+
 document.querySelectorAll('[data-availability-form]').forEach((form) => {
   const checkbox = form.querySelector('input[type="checkbox"]');
   const value = form.querySelector('[data-availability-value]');
@@ -2872,6 +3108,8 @@ updateCartCount();
 syncPaymentBox();
 applyMenuFilters();
 restoreStaticOrderSession();
+initAddToOrderMode();
+renderAddToOrderBanner();
 syncMenuFromDatabase();
 showIndependenceBannerPopup();
 renderCheckout();
@@ -2884,6 +3122,7 @@ window.addEventListener('pageshow', () => {
   renderCheckout();
   updateCartCount();
   restoreStaticOrderSession();
+  renderAddToOrderBanner();
 });
 
 window.addEventListener('visibilitychange', () => {
