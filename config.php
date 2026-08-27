@@ -66,11 +66,17 @@ define('MSG91_AUTHKEY', configValue('MSG91_AUTHKEY', 'MSG91_AUTH_KEY') ?: $msg91
 // only for this local reference-assisted setup; Hostinger keeps it enabled.
 define('MSG91_SSL_VERIFY', !is_file($localReferenceEnv));
 
+date_default_timezone_set('Asia/Kolkata');
+
 function db(): PDO {
   static $pdo = null;
   if ($pdo === null) {
     $pdo = new PDO('mysql:host='.DB_HOST.';dbname='.DB_NAME.';charset=utf8mb4', DB_USER, DB_PASS,
       [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+    // Force IST regardless of the host's MySQL server timezone, so
+    // createdAt/NOW()/CURRENT_TIMESTAMP values match what the frontend
+    // (assets/app.js) assumes when it renders timestamps as IST.
+    $pdo->exec("SET time_zone='+05:30'");
   }
   return $pdo;
 }
