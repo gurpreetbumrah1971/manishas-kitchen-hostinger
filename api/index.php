@@ -120,8 +120,47 @@ function createOrderFromRequest(array $b): never {
     stmt('INSERT INTO `order`(orderNumber,customerId,customerName,mobileNumber,whatsappNumber,email,address,tableNumber,orderType,paymentMethod,totalAmount,gstAmount,discountAmount,referralCode,referrerId,referralDiscount,cashbackRedeemed,cashbackEarned,grandTotal,customerSessionToken,customerSessionExpiresAt) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,DATE_ADD(NOW(),INTERVAL 30 MINUTE))',[$number,$customer['id'],$b['customerName']??'Guest',$customer['mobileNumber'],$b['whatsappNumber']??null,$b['email']??null,$b['address']??null,$b['tableNumber']??null,in_array($b['orderType']??'', ['DINE_IN','TAKEAWAY','DELIVERY'])?$b['orderType']:'DINE_IN',in_array($b['paymentMethod']??'', ['CASH','UPI','CARD'])?$b['paymentMethod']:'UPI',$subtotal,money($b['gstAmount']??0),$discount,$referralCode?:null,$referrer['id']??null,$referralDiscount,$redeemed,$earned,$grand,$session]);
     $orderId=(int)$pdo->lastInsertId(); foreach($items as $item) stmt('INSERT INTO orderitem(orderId,foodItemId,quantity,unitPrice,subtotal) VALUES(?,?,?,?,?)',[$orderId,$item['food']['id'],$item['quantity'],$item['price'],$item['subtotal']]);
     $balance=(float)$customer['cashbackBalance']; if($redeemed>0){$balance=money($balance-$redeemed);stmt('INSERT INTO cashbacktransaction(customerId,orderId,type,amount,balanceAfter,note) VALUES(?,?,?,?,?,?)',[$customer['id'],$orderId,'REDEEMED',$redeemed,$balance,'Redeemed on order '.$number]); stmt('UPDATE customer SET cashbackBalance=? WHERE id=?',[$balance,$customer['id']]);}
-    $pdo->commit(); out(['id'=>$orderId,'orderNumber'=>$number,'grandTotal'=>$grand,'cashbackRedeemed'=>$redeemed,'cashbackEarned'=>$earned,'customerReferralCode'=>$customer['referralCode'],'referralApplied'=>(bool)$referrer,'customerSessionToken'=>$session,'customerSessionExpiresAt'=>date(DATE_ATOM,time()+1800)],201);
+    $pdo->commit();
+    sendOrderNotificationEmail($number,(string)($b['customerName']??''),(string)$customer['mobileNumber'],(string)($b['orderType']??'DINE_IN'),(string)($b['paymentMethod']??'UPI'),$b['tableNumber']??null,$b['address']??null,$items,$subtotal,money($b['gstAmount']??0),$discount,$grand);
+    out(['id'=>$orderId,'orderNumber'=>$number,'grandTotal'=>$grand,'cashbackRedeemed'=>$redeemed,'cashbackEarned'=>$earned,'customerReferralCode'=>$customer['referralCode'],'referralApplied'=>(bool)$referrer,'customerSessionToken'=>$session,'customerSessionExpiresAt'=>date(DATE_ATOM,time()+1800)],201);
   } catch (Throwable $error) { if($pdo->inTransaction())$pdo->rollBack(); throw $error; }
+}
+function orderNotificationRecipients(): array {
+  $configured=array_filter(array_map('trim',explode(',',ORDER_NOTIFICATION_RECIPIENTS)));
+  return $configured ?: ['gurpreet.bumrah@gmail.com','manishaskitchen2026@gmail.com','aryanchavan131@gmail.com'];
+}
+function sendOrderNotificationEmail(string $orderNumber,string $customerName,string $mobileNumber,string $orderType,string $paymentMethod,?string $tableNumber,?string $address,array $items,float $subtotal,float $gst,float $discount,float $grand): void {
+  if (RESEND_API_KEY==='' || RESEND_FROM_EMAIL==='') return;
+  $money=fn($n)=>'Rs. '.number_format((float)$n,2);
+  $lines=[]; $i=1; foreach ($items as $item) { $lines[]=$i.'. '.$item['food']['name'].' x '.$item['quantity'].' - '.$money($item['subtotal']); $i++; }
+  $text=implode("\n",array_filter([
+    'New order received','',
+    'Order ID: '.$orderNumber,
+    'Placed: '.date('d M Y, h:i A'),
+    'Customer: '.($customerName ?: 'Not provided'),
+    'Mobile: '.($mobileNumber ?: 'Not provided'),
+    'Order type: '.str_replace('_',' ',$orderType),
+    'Payment: '.$paymentMethod.($tableNumber?"\nTable: $tableNumber":'').($address?"\nAddress: $address":''),
+    '','Items:',$lines?implode("\n",$lines):'No items listed','',
+    'Food subtotal: '.$money($subtotal),
+    'GST: '.$money($gst),
+    'Discount: '.$money($discount),
+    'Grand total: '.$money($grand),
+  ],fn($v)=>$v!==''));
+  $payload=json_encode(['from'=>RESEND_FROM_EMAIL,'to'=>orderNotificationRecipients(),'subject'=>"New order $orderNumber - ".$money($grand),'text'=>$text]);
+  $headers=['Authorization: Bearer '.RESEND_API_KEY,'Content-Type: application/json'];
+  try {
+    if (function_exists('curl_init')) {
+      $curl=curl_init('https://api.resend.com/emails');
+      curl_setopt_array($curl,[CURLOPT_POST=>true,CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>20,CURLOPT_HTTPHEADER=>$headers,CURLOPT_POSTFIELDS=>$payload]);
+      $raw=curl_exec($curl); $status=curl_getinfo($curl,CURLINFO_HTTP_CODE); curl_close($curl);
+    } else {
+      $context=stream_context_create(['http'=>['method'=>'POST','header'=>implode("\r\n",$headers),'content'=>$payload,'timeout'=>20,'ignore_errors'=>true]]);
+      $raw=@file_get_contents('https://api.resend.com/emails',false,$context);
+      $statusLine=$http_response_header[0]??''; preg_match('#\s(\d{3})\s#',$statusLine,$statusMatch); $status=(int)($statusMatch[1]??0);
+    }
+    if ($status<200 || $status>=300) error_log('Order email notification error: Resend request failed ('.$status.'): '.$raw);
+  } catch (Throwable $error) { error_log('Order email notification error: '.$error->getMessage()); }
 }
 function discountRateForSubtotal(float $subtotal): float {
   // Mirrors assets/app.js's discountRateForSubtotal() and checkout.html's data-discount-tiers.

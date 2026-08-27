@@ -62,6 +62,12 @@ define('OTP_PROVIDER', strtolower(configValue('OTP_PROVIDER') ?: 'msg91'));
 define('MSG91_WIDGET_ID', configValue('MSG91_WIDGET_ID') ?: $msg91WidgetId);
 define('MSG91_TOKEN_AUTH', configValue('MSG91_TOKEN_AUTH', 'MSG91_WIDGET_TOKEN', 'MSG91_WIDGET_AUTH_TOKEN') ?: $msg91TokenAuth);
 define('MSG91_AUTHKEY', configValue('MSG91_AUTHKEY', 'MSG91_AUTH_KEY') ?: $msg91Authkey);
+
+// Resend order-notification email. Set these via config.local.php (see
+// config.local.example.php) or environment variables on Hostinger.
+define('RESEND_API_KEY', configValue('RESEND_API_KEY'));
+define('RESEND_FROM_EMAIL', configValue('RESEND_FROM_EMAIL'));
+define('ORDER_NOTIFICATION_RECIPIENTS', configValue('ORDER_NOTIFICATION_RECIPIENTS'));
 // XAMPP's bundled CA list is outdated on this computer. Disable verification
 // only for this local reference-assisted setup; Hostinger keeps it enabled.
 define('MSG91_SSL_VERIFY', !is_file($localReferenceEnv));
