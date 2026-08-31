@@ -17,4 +17,8 @@ return [
   // 'MSG91_WHATSAPP_INTEGRATED_NUMBER' => '919653102273',
   // 'MSG91_WHATSAPP_TEMPLATE_NAME' => 'order_confirmation',
   // 'MSG91_WHATSAPP_NAMESPACE' => 'paste-template-namespace',
+  // Optional: staff "new order placed" WhatsApp alert. Defaults to the three
+  // restaurant numbers baked into config.php if not set here.
+  // 'MSG91_WHATSAPP_NOTIFICATION_TEMPLATE' => 'order_notification',
+  // 'ORDER_NOTIFICATION_WHATSAPP_RECIPIENTS' => '9819068372,8879630082,9076241129',
 ];

@@ -122,6 +122,7 @@ function createOrderFromRequest(array $b): never {
     $balance=(float)$customer['cashbackBalance']; if($redeemed>0){$balance=money($balance-$redeemed);stmt('INSERT INTO cashbacktransaction(customerId,orderId,type,amount,balanceAfter,note) VALUES(?,?,?,?,?,?)',[$customer['id'],$orderId,'REDEEMED',$redeemed,$balance,'Redeemed on order '.$number]); stmt('UPDATE customer SET cashbackBalance=? WHERE id=?',[$balance,$customer['id']]);}
     $pdo->commit();
     sendOrderNotificationEmail($number,(string)($b['customerName']??''),(string)$customer['mobileNumber'],(string)($b['orderType']??'DINE_IN'),(string)($b['paymentMethod']??'UPI'),$b['tableNumber']??null,$b['address']??null,$items,$subtotal,money($b['gstAmount']??0),$discount,$grand);
+    sendOrderNotificationWhatsapp($number);
     out(['id'=>$orderId,'orderNumber'=>$number,'grandTotal'=>$grand,'cashbackRedeemed'=>$redeemed,'cashbackEarned'=>$earned,'customerReferralCode'=>$customer['referralCode'],'referralApplied'=>(bool)$referrer,'customerSessionToken'=>$session,'customerSessionExpiresAt'=>date(DATE_ATOM,time()+1800)],201);
   } catch (Throwable $error) { if($pdo->inTransaction())$pdo->rollBack(); throw $error; }
 }
@@ -213,6 +214,45 @@ function sendOrderConfirmationWhatsapp(array $order): void {
     // against MSG91's dashboard - trim to error-only once confirmed working.
     error_log('WhatsApp order confirmation for '.$order['orderNumber'].' -> '.$number.' (HTTP '.$status.'): '.$raw);
   } catch (Throwable $error) { error_log('WhatsApp order confirmation error for order '.$order['orderNumber'].': '.$error->getMessage()); }
+}
+function orderNotificationWhatsappRecipients(): array {
+  $configured=array_filter(array_map('trim',explode(',',ORDER_NOTIFICATION_WHATSAPP_RECIPIENTS)));
+  return $configured ?: ['9819068372','8879630082','9076241129'];
+}
+function sendOrderNotificationWhatsapp(string $orderNumber): void {
+  if (MSG91_AUTHKEY==='') { error_log('WhatsApp order notification skipped: MSG91_AUTHKEY is not configured.'); return; }
+  $numbers=array_values(array_unique(array_filter(array_map('mobile',orderNotificationWhatsappRecipients()),fn($n)=>strlen($n)>=10)));
+  if (!$numbers) { error_log('WhatsApp order notification skipped: no valid recipient numbers configured.'); return; }
+  $payload=json_encode([
+    'integrated_number'=>MSG91_WHATSAPP_INTEGRATED_NUMBER,
+    'content_type'=>'template',
+    'payload'=>[
+      'messaging_product'=>'whatsapp',
+      'type'=>'template',
+      'template'=>[
+        'name'=>MSG91_WHATSAPP_NOTIFICATION_TEMPLATE,
+        'language'=>['code'=>'en','policy'=>'deterministic'],
+        'namespace'=>MSG91_WHATSAPP_NAMESPACE,
+        'to_and_components'=>[[
+          'to'=>$numbers,
+          'components'=>(object)[],
+        ]],
+      ],
+    ],
+  ]);
+  $headers=['Content-Type: application/json','authkey: '.MSG91_AUTHKEY];
+  try {
+    if (function_exists('curl_init')) {
+      $curl=curl_init('https://api.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/bulk/');
+      curl_setopt_array($curl,[CURLOPT_POST=>true,CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>20,CURLOPT_HTTPHEADER=>$headers,CURLOPT_POSTFIELDS=>$payload,CURLOPT_SSL_VERIFYPEER=>MSG91_SSL_VERIFY,CURLOPT_SSL_VERIFYHOST=>MSG91_SSL_VERIFY?2:0]);
+      $raw=curl_exec($curl); $status=curl_getinfo($curl,CURLINFO_HTTP_CODE); curl_close($curl);
+    } else {
+      $streamContext=stream_context_create(['http'=>['method'=>'POST','header'=>implode("\r\n",$headers),'content'=>$payload,'timeout'=>20,'ignore_errors'=>true],'ssl'=>['verify_peer'=>MSG91_SSL_VERIFY,'verify_peer_name'=>MSG91_SSL_VERIFY]]);
+      $raw=@file_get_contents('https://api.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/bulk/',false,$streamContext);
+      $statusLine=$http_response_header[0]??''; preg_match('#\s(\d{3})\s#',$statusLine,$statusMatch); $status=(int)($statusMatch[1]??0);
+    }
+    error_log('WhatsApp order notification for '.$orderNumber.' -> '.implode(',',$numbers).' (HTTP '.$status.'): '.$raw);
+  } catch (Throwable $error) { error_log('WhatsApp order notification error for order '.$orderNumber.': '.$error->getMessage()); }
 }
 function discountRateForSubtotal(float $subtotal): float {
   // Mirrors assets/app.js's discountRateForSubtotal() and checkout.html's data-discount-tiers.

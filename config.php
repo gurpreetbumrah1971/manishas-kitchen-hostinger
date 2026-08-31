@@ -68,6 +68,11 @@ define('MSG91_AUTHKEY', configValue('MSG91_AUTHKEY', 'MSG91_AUTH_KEY') ?: $msg91
 define('MSG91_WHATSAPP_INTEGRATED_NUMBER', configValue('MSG91_WHATSAPP_INTEGRATED_NUMBER', 'MSG91_WHATSAPP_SENDER_NUMBER') ?: '919653102273');
 define('MSG91_WHATSAPP_TEMPLATE_NAME', configValue('MSG91_WHATSAPP_TEMPLATE_NAME', 'MSG91_WHATSAPP_ORDER_TEMPLATE') ?: 'order_confirmation');
 define('MSG91_WHATSAPP_NAMESPACE', configValue('MSG91_WHATSAPP_NAMESPACE', 'MSG91_WHATSAPP_TEMPLATE_NAMESPACE') ?: '6a394fca_e0ed_41b8_9923_4eb65bb6e6d0');
+// Staff-facing "new order placed" WhatsApp alert (separate template, no body
+// variables). Recipients default to the restaurant's numbers below; override
+// via ORDER_NOTIFICATION_WHATSAPP_RECIPIENTS (comma-separated) if they change.
+define('MSG91_WHATSAPP_NOTIFICATION_TEMPLATE', configValue('MSG91_WHATSAPP_NOTIFICATION_TEMPLATE') ?: 'order_notification');
+define('ORDER_NOTIFICATION_WHATSAPP_RECIPIENTS', configValue('ORDER_NOTIFICATION_WHATSAPP_RECIPIENTS'));
 
 // Resend order-notification email. Set these via config.local.php (see
 // config.local.example.php) or environment variables on Hostinger.
