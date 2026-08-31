@@ -2420,7 +2420,7 @@ function showStaticOrderThankYou({ order, total, amount, paymentMethod, whatsapp
   const customer = (auth && auth.customer) || {};
   const referralCode = String(order.customerReferralCode || order.referralCode || (auth && auth.customer && auth.customer.referralCode) || '').trim().toUpperCase();
   const shareUrl = pageUrl('menu.html');
-  const shareText = `Order from Manisha's Kitchen and get 5% off your first order with my referral code\n\n${referralCode}\n\nVisit - ${shareUrl}`;
+  const shareText = `Order from Manisha's Kitchen and get 5% off your first order with my referral code\n\n\`\`\`${referralCode}\`\`\`\n\nVisit - ${shareUrl}`;
   section.innerHTML = `
     <div class="success-panel checkout-thank-you">
       <h1>Thank you for your order!</h1>
