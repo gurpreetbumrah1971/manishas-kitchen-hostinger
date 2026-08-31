@@ -37,6 +37,10 @@ For Hostinger Git deployments, create a private file named `config.local.php` **
 
 For local XAMPP only, this build reads the existing reference app's MSG91 setup without modifying it. If any MSG91 credential is missing, OTP requests are rejected instead of falling back to a visible test code.
 
+## MSG91 WhatsApp order confirmation
+
+When an admin confirms an order, a WhatsApp message using the approved `order_confirmation` template is sent to the customer via MSG91's WhatsApp API. This reuses the MSG91 account authkey (not the OTP widget token), so `config.local.php` also needs `MSG91_AUTHKEY` set — see `config.local.example.php`. Without it, confirmations are silently skipped (logged to the PHP error log, order status updates still succeed).
+
 ## Included compatibility changes
 
 - Apache rewrites retain `/menu`, `/checkout`, and `/admin/...` URLs.

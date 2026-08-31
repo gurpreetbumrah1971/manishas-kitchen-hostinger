@@ -162,6 +162,58 @@ function sendOrderNotificationEmail(string $orderNumber,string $customerName,str
     if ($status<200 || $status>=300) error_log('Order email notification error: Resend request failed ('.$status.'): '.$raw);
   } catch (Throwable $error) { error_log('Order email notification error: '.$error->getMessage()); }
 }
+function sendOrderConfirmationWhatsapp(array $order): void {
+  if (MSG91_AUTHKEY==='') { error_log('WhatsApp order confirmation skipped: MSG91_AUTHKEY is not configured.'); return; }
+  $number=mobile($order['whatsappNumber'] ?: ($order['mobileNumber'] ?? ''));
+  if (strlen($number)<10) { error_log('WhatsApp order confirmation skipped: order '.$order['orderNumber'].' has no valid WhatsApp/mobile number.'); return; }
+  $items=stmt('SELECT oi.quantity,oi.subtotal,f.name FROM orderitem oi JOIN fooditem f ON f.id=oi.foodItemId WHERE oi.orderId=?',[(int)$order['id']])->fetchAll();
+  $money=fn($n)=>'Rs. '.number_format((float)$n,2);
+  $itemsSummary=implode(', ',array_map(fn($i)=>$i['quantity'].'x '.$i['name'].' ('.$money($i['subtotal']).')',$items));
+  if ($itemsSummary==='') $itemsSummary='No items listed';
+  $orderTypeLabel=str_replace('_',' ',(string)$order['orderType']);
+  $context=($order['orderType']==='DINE_IN' && !empty($order['tableNumber'])) ? 'Table '.$order['tableNumber'] : $orderTypeLabel;
+  // TEMP mapping while we validate live delivery against the approved
+  // template text (body_1..5 order isn't confirmed yet) - adjust once we see
+  // an actual delivered message.
+  $payload=json_encode([
+    'integrated_number'=>MSG91_WHATSAPP_INTEGRATED_NUMBER,
+    'content_type'=>'template',
+    'payload'=>[
+      'messaging_product'=>'whatsapp',
+      'type'=>'template',
+      'template'=>[
+        'name'=>MSG91_WHATSAPP_TEMPLATE_NAME,
+        'language'=>['code'=>'en','policy'=>'deterministic'],
+        'namespace'=>MSG91_WHATSAPP_NAMESPACE,
+        'to_and_components'=>[[
+          'to'=>[$number],
+          'components'=>[
+            'body_1'=>['type'=>'text','value'=>(string)($order['customerName'] ?: 'Customer')],
+            'body_2'=>['type'=>'text','value'=>(string)$order['orderNumber']],
+            'body_3'=>['type'=>'text','value'=>$itemsSummary],
+            'body_4'=>['type'=>'text','value'=>$money($order['grandTotal'])],
+            'body_5'=>['type'=>'text','value'=>$context],
+          ],
+        ]],
+      ],
+    ],
+  ]);
+  $headers=['Content-Type: application/json','authkey: '.MSG91_AUTHKEY];
+  try {
+    if (function_exists('curl_init')) {
+      $curl=curl_init('https://api.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/bulk/');
+      curl_setopt_array($curl,[CURLOPT_POST=>true,CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>20,CURLOPT_HTTPHEADER=>$headers,CURLOPT_POSTFIELDS=>$payload,CURLOPT_SSL_VERIFYPEER=>MSG91_SSL_VERIFY,CURLOPT_SSL_VERIFYHOST=>MSG91_SSL_VERIFY?2:0]);
+      $raw=curl_exec($curl); $status=curl_getinfo($curl,CURLINFO_HTTP_CODE); curl_close($curl);
+    } else {
+      $streamContext=stream_context_create(['http'=>['method'=>'POST','header'=>implode("\r\n",$headers),'content'=>$payload,'timeout'=>20,'ignore_errors'=>true],'ssl'=>['verify_peer'=>MSG91_SSL_VERIFY,'verify_peer_name'=>MSG91_SSL_VERIFY]]);
+      $raw=@file_get_contents('https://api.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/bulk/',false,$streamContext);
+      $statusLine=$http_response_header[0]??''; preg_match('#\s(\d{3})\s#',$statusLine,$statusMatch); $status=(int)($statusMatch[1]??0);
+    }
+    // Logged at full verbosity (including 2xx) while we validate delivery
+    // against MSG91's dashboard - trim to error-only once confirmed working.
+    error_log('WhatsApp order confirmation for '.$order['orderNumber'].' -> '.$number.' (HTTP '.$status.'): '.$raw);
+  } catch (Throwable $error) { error_log('WhatsApp order confirmation error for order '.$order['orderNumber'].': '.$error->getMessage()); }
+}
 function discountRateForSubtotal(float $subtotal): float {
   // Mirrors assets/app.js's discountRateForSubtotal() and checkout.html's data-discount-tiers.
   $tiers = ['1000' => 0.2, '800' => 0.15, '400' => 0.1];
@@ -266,7 +318,7 @@ try {
   if ($p==='admin/orders' && $m==='GET') {auth('admin');$orders=stmt('SELECT * FROM `order` ORDER BY createdAt DESC')->fetchAll();out(array_map('adminOrder',$orders));}
   if ($p==='admin/export/orders' && $m==='GET') {auth('admin');header('Content-Type: text/csv; charset=utf-8');header('Content-Disposition: attachment; filename="orders-export-'.date('Y-m-d').'.csv"');$out=fopen('php://output','w');fputcsv($out,['Order ID','Order Number','Timestamp','Customer','Mobile','WhatsApp','Address','Table','Subtotal','GST','Discount','Cashback Redeemed','Cashback Earned','Grand Total','Status','Order Type','Payment Method']);$orders=stmt('SELECT id,orderNumber,createdAt,customerName,mobileNumber,whatsappNumber,address,tableNumber,totalAmount,gstAmount,discountAmount,cashbackRedeemed,cashbackEarned,grandTotal,status,orderType,paymentMethod FROM `order` ORDER BY createdAt DESC')->fetchAll();foreach($orders as $o){fputcsv($out,[$o['id'],$o['orderNumber'],$o['createdAt'],$o['customerName'],$o['mobileNumber'],$o['whatsappNumber'],$o['address'],$o['tableNumber'],$o['totalAmount'],$o['gstAmount'],$o['discountAmount'],$o['cashbackRedeemed'],$o['cashbackEarned'],$o['grandTotal'],$o['status'],$o['orderType'],$o['paymentMethod']]);}fclose($out);exit;}
   if ($p==='admin/export/customers' && $m==='GET') {auth('admin');header('Content-Type: text/csv; charset=utf-8');header('Content-Disposition: attachment; filename="lms-customers-export-'.date('Y-m-d').'.csv"');$out=fopen('php://output','w');fputcsv($out,['Customer ID','Name','Mobile Number','Birthday','Anniversary','Referral Code','Cashback Balance','Order Count','Total Spent','First Order','Last Order','Created At']);$customers=stmt('SELECT c.id,c.name,c.mobileNumber,c.birthday,c.anniversary,c.referralCode,c.cashbackBalance,c.createdAt,COUNT(o.id) orderCount,COALESCE(SUM(o.grandTotal),0) totalSpent,MIN(o.createdAt) firstOrder,MAX(o.createdAt) lastOrder FROM customer c LEFT JOIN `order` o ON o.customerId=c.id GROUP BY c.id ORDER BY c.updatedAt DESC')->fetchAll();foreach($customers as $c){fputcsv($out,[$c['id'],$c['name'] ?? '',$c['mobileNumber'],$c['birthday'],$c['anniversary'],$c['referralCode'],$c['cashbackBalance'],$c['orderCount'],$c['totalSpent'],$c['firstOrder'],$c['lastOrder'],$c['createdAt']]);}fclose($out);exit;}
-  if (preg_match('#^admin/orders/(\d+)/status$#',$p,$x)&&$m==='PATCH') {auth('admin');$b=body();$a=strtoupper($b['action']??$b['status']??'');$map=['CONFIRM'=>null,'CONFIRMED'=>null,'PREPARING'=>'PREPARING','READY'=>'COMPLETED','COMPLETED'=>'COMPLETED','DELIVERED'=>'DELIVERED','CANCELLED'=>'CANCELLED'];if(!array_key_exists($a,$map))out(['error'=>'Invalid order action'],400);$sets=[];if($a==='CONFIRM'||$a==='CONFIRMED')$sets[]='confirmedAt=COALESCE(confirmedAt,NOW())';if($map[$a])$sets[]='status='.db()->quote($map[$a]);if($a==='PREPARING'){$sets[]='preparationStartedAt=NOW()';$sets[]='preparationMinutes='.(int)max(1,min(180,$b['preparationMinutes']??1));}if($a==='READY'||$a==='COMPLETED')$sets[]='readyAt=NOW()';if($a==='DELIVERED')$sets[]='deliveredAt=NOW()';if($sets)stmt('UPDATE `order` SET '.implode(',',$sets).' WHERE id=?',[(int)$x[1]]);if($a==='CONFIRM'||$a==='CONFIRMED')syncCashbackForOrder((int)$x[1]);out(adminOrder(stmt('SELECT * FROM `order` WHERE id=?',[(int)$x[1]])->fetch()));}
+  if (preg_match('#^admin/orders/(\d+)/status$#',$p,$x)&&$m==='PATCH') {auth('admin');$b=body();$a=strtoupper($b['action']??$b['status']??'');$map=['CONFIRM'=>null,'CONFIRMED'=>null,'PREPARING'=>'PREPARING','READY'=>'COMPLETED','COMPLETED'=>'COMPLETED','DELIVERED'=>'DELIVERED','CANCELLED'=>'CANCELLED'];if(!array_key_exists($a,$map))out(['error'=>'Invalid order action'],400);$orderId=(int)$x[1];$wasConfirmed=!empty(stmt('SELECT confirmedAt FROM `order` WHERE id=?',[$orderId])->fetchColumn());$sets=[];if($a==='CONFIRM'||$a==='CONFIRMED')$sets[]='confirmedAt=COALESCE(confirmedAt,NOW())';if($map[$a])$sets[]='status='.db()->quote($map[$a]);if($a==='PREPARING'){$sets[]='preparationStartedAt=NOW()';$sets[]='preparationMinutes='.(int)max(1,min(180,$b['preparationMinutes']??1));}if($a==='READY'||$a==='COMPLETED')$sets[]='readyAt=NOW()';if($a==='DELIVERED')$sets[]='deliveredAt=NOW()';if($sets)stmt('UPDATE `order` SET '.implode(',',$sets).' WHERE id=?',[$orderId]);$updatedOrder=stmt('SELECT * FROM `order` WHERE id=?',[$orderId])->fetch();if($a==='CONFIRM'||$a==='CONFIRMED'){syncCashbackForOrder($orderId);if(!$wasConfirmed)sendOrderConfirmationWhatsapp($updatedOrder);}out(adminOrder($updatedOrder));}
   if (preg_match('#^admin/orders/(\d+)$#',$p,$x)&&$m==='DELETE') {auth('admin');$id=(int)$x[1];$pdo=db();$pdo->beginTransaction();try{$order=stmt('SELECT customerId,referrerId FROM `order` WHERE id=?',[$id])->fetch();if(!$order)out(['error'=>'Order not found'],404);$affected=array_unique(array_filter([(int)$order['customerId'],(int)$order['referrerId']]));stmt('DELETE FROM cashbacktransaction WHERE orderId=?',[$id]);stmt('DELETE FROM `order` WHERE id=?',[$id]);foreach($affected as $customerId){$balance=(float)stmt("SELECT COALESCE(SUM(CASE WHEN type='REDEEMED' THEN -amount ELSE amount END),0) FROM cashbacktransaction WHERE customerId=?",[$customerId])->fetchColumn();stmt('UPDATE customer SET cashbackBalance=? WHERE id=?',[$balance,$customerId]);}$pdo->commit();out(['deleted'=>true]);}catch(Throwable $e){if($pdo->inTransaction())$pdo->rollBack();throw $e;}}
   out(['error'=>'Route not found'],404);
 } catch(Throwable $e) { error_log('Order app API: '.$e->getMessage()); if($e instanceof RuntimeException) out(['error'=>$e->getMessage()],422); out(['error'=>'Server error. Check database configuration and server error log.'],500); }

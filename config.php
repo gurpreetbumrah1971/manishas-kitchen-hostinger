@@ -63,6 +63,12 @@ define('MSG91_WIDGET_ID', configValue('MSG91_WIDGET_ID') ?: $msg91WidgetId);
 define('MSG91_TOKEN_AUTH', configValue('MSG91_TOKEN_AUTH', 'MSG91_WIDGET_TOKEN', 'MSG91_WIDGET_AUTH_TOKEN') ?: $msg91TokenAuth);
 define('MSG91_AUTHKEY', configValue('MSG91_AUTHKEY', 'MSG91_AUTH_KEY') ?: $msg91Authkey);
 
+// MSG91 WhatsApp order-confirmation template. Reuses MSG91_AUTHKEY above.
+// Override any of these via config.local.php if the template changes.
+define('MSG91_WHATSAPP_INTEGRATED_NUMBER', configValue('MSG91_WHATSAPP_INTEGRATED_NUMBER', 'MSG91_WHATSAPP_SENDER_NUMBER') ?: '919653102273');
+define('MSG91_WHATSAPP_TEMPLATE_NAME', configValue('MSG91_WHATSAPP_TEMPLATE_NAME', 'MSG91_WHATSAPP_ORDER_TEMPLATE') ?: 'order_confirmation');
+define('MSG91_WHATSAPP_NAMESPACE', configValue('MSG91_WHATSAPP_NAMESPACE', 'MSG91_WHATSAPP_TEMPLATE_NAMESPACE') ?: '6a394fca_e0ed_41b8_9923_4eb65bb6e6d0');
+
 // Resend order-notification email. Set these via config.local.php (see
 // config.local.example.php) or environment variables on Hostinger.
 define('RESEND_API_KEY', configValue('RESEND_API_KEY'));
