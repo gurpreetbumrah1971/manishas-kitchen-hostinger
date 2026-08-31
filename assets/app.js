@@ -1045,10 +1045,7 @@ function shouldShowIndependenceBanner() {
   const path = window.location.pathname.toLowerCase();
   const isMenuPage = document.body.classList.contains('menu-page')
     || path.endsWith('/menu.html')
-    || path.endsWith('/menu.php')
-    || path.endsWith('/index.html')
-    || path === '/'
-    || path === '';
+    || path.endsWith('/menu.php');
   if (!isMenuPage) return false;
 
   try {
