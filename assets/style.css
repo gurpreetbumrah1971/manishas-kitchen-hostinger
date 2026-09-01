@@ -573,6 +573,22 @@ textarea {
     background: #c62828;
 }
 
+.bestseller-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin-left: 6px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: #fff3cd;
+    color: #8a5a00;
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+
 .menu-heading {
     display: flex;
     justify-content: space-between;

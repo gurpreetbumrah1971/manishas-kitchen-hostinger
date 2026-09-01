@@ -1096,7 +1096,10 @@ function showIndependenceBannerPopup() {
 }
 
 function categoryNameFromNode(node) {
-  return ((node && node.textContent) || '').replace(/\s+/g, ' ').trim();
+  if (!node) return '';
+  const clone = node.cloneNode(true);
+  clone.querySelectorAll('.bestseller-badge').forEach((el) => el.remove());
+  return (clone.textContent || '').replace(/\s+/g, ' ').trim();
 }
 
 function normalizeStaticMenuCategories() {
@@ -1360,14 +1363,14 @@ function menuCardHtml(item) {
     image: item.image,
   });
   return `
-    <article class="card menu-card" data-menu-item data-name="${escapeHtml(`${item.name} ${item.description}`.toLowerCase())}" data-veg="${item.isVeg ? 'veg' : 'nonveg'}">
+    <article class="card menu-card" data-menu-item data-name="${escapeHtml(`${item.name} ${item.description}`.toLowerCase())}" data-veg="${item.isVeg ? 'veg' : 'nonveg'}" data-bestseller="${item.bestseller ? '1' : '0'}">
       <div class="image-wrap">
         <img src="${escapeHtml(item.image)}" alt="${escapeHtml(item.name)}">
         <span class="badge ${item.isVeg ? 'veg' : 'nonveg'}">${item.isVeg ? 'Veg' : 'Non-Veg'}</span>
       </div>
       <div class="menu-body">
         <div class="menu-heading">
-          <h3>${escapeHtml(item.name)}</h3>
+          <h3>${escapeHtml(item.name)}${item.bestseller ? ' <span class="bestseller-badge">Bestseller</span>' : ''}</h3>
           <strong>${money(item.price)}</strong>
         </div>
         <p>${escapeHtml(item.description)}</p>
@@ -1420,6 +1423,7 @@ function menuItemFromCard(card) {
     price,
     image,
     isVeg: card.dataset.veg !== 'nonveg',
+    bestseller: card.dataset.bestseller === '1',
     searchText: card.dataset.name || `${name} ${description}`.toLowerCase(),
   };
 }
