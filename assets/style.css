@@ -2251,6 +2251,31 @@ th {
     line-height: 1.4;
 }
 
+.footer-locate-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--ink);
+    font-weight: 700;
+    font-size: 0.86rem;
+    text-decoration: none;
+    opacity: 0.9;
+    transition: opacity 0.2s ease;
+}
+
+.footer-locate-link:hover,
+.footer-locate-link:focus-visible {
+    opacity: 1;
+    text-decoration: underline;
+}
+
+.footer-locate-link svg {
+    width: 18px;
+    height: 18px;
+    fill: var(--ink);
+    flex-shrink: 0;
+}
+
 .footer-partners {
     display: flex;
     align-items: center;
