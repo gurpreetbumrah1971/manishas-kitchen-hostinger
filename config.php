@@ -2,9 +2,12 @@
 /* Copy this folder to public_html. Set these four values from hPanel > MySQL
  * Databases. Prefer keeping this file one directory above public_html when
  * possible, then update api/index.php to require that external path. */
-/* Local XAMPP convenience: when this copy still has placeholder values, use
- * the reference application's local MySQL connection. Hostinger never has
- * that path, so production continues to use the values below. */
+/* Local XAMPP convenience: when this copy still has placeholder values, reuse
+ * the reference application's local MySQL host/user/password (root, no
+ * password) but keep this project's own database name so its menu never
+ * mixes with the reference app's or another sibling project's data.
+ * Hostinger never has that path, so production continues to use the values
+ * below. */
 $localReferenceEnv = 'C:/XAMPP/htdocs/order booking system/server/.env';
 $privateConfig = [];
 // On shared hosting, keep secrets one directory above public_html. This file
@@ -25,7 +28,7 @@ if (is_file($localReferenceEnv)) {
 }
 $localDatabase = $localDatabaseUrl ? parse_url($localDatabaseUrl) : null;
 define('DB_HOST', $localDatabase['host'] ?? 'localhost');
-define('DB_NAME', $localDatabase ? 'spice_restaurant' : 'u515749657_manikitchen');
+define('DB_NAME', $localDatabase ? 'manishas_kitchen' : 'u515749657_manikitchen');
 define('DB_USER', isset($localDatabase['user']) ? rawurldecode($localDatabase['user']) : 'u515749657_manisha');
 define('DB_PASS', isset($localDatabase['pass']) ? rawurldecode($localDatabase['pass']) : 'Manisha1981!');
 const APP_SECRET = '5fa703cb0bd8adc42c185ea066191b5d6bea2edf7cd26a079e3f398cdc54eceb';
