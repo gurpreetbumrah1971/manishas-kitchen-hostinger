@@ -159,17 +159,12 @@ async function sendMsg91Otp(mobileNumber) {
 const CASHBACK_NUMBER_KEY = 'mkCashbackNumber';
 const CASHBACK_NAME_KEY = 'mkCashbackName';
 const CASHBACK_REFERRAL_KEY = 'mkReferralCode';
-const INDEPENDENCE_BANNER_SEEN_KEY = 'mkIndependenceBannerSeenV4';
-const APP_ASSET_BASE_URL = document.currentScript && document.currentScript.src
-  ? new URL('.', document.currentScript.src).toString()
-  : new URL('assets/', APP_BASE_URL).toString();
 const projectAssetUrl = (url) => {
   if (!url || /^https?:\/\//i.test(url)) return url;
   return url.startsWith('/assets/')
     ? new URL(url.slice(1), APP_BASE_URL).toString()
     : url;
 };
-const INDEPENDENCE_BANNER_URL = new URL('banners/independence-month-banner.png', APP_ASSET_BASE_URL).toString();
 const DISCOUNT_TIERS = {
   400: 0.10,
   800: 0.15,
@@ -1039,60 +1034,6 @@ function updateDiscountNudge(subtotal) {
     }
     node.hidden = message === '';
   });
-}
-
-function shouldShowIndependenceBanner() {
-  const path = window.location.pathname.toLowerCase();
-  const isMenuPage = document.body.classList.contains('menu-page')
-    || path.endsWith('/menu.html')
-    || path.endsWith('/menu.php');
-  if (!isMenuPage) return false;
-
-  try {
-    return localStorage.getItem(INDEPENDENCE_BANNER_SEEN_KEY) !== '1';
-  } catch {
-    return false;
-  }
-}
-
-function showIndependenceBannerPopup() {
-  if (!shouldShowIndependenceBanner()) return;
-
-  try {
-    localStorage.setItem(INDEPENDENCE_BANNER_SEEN_KEY, '1');
-  } catch {
-    return;
-  }
-
-  const overlay = document.createElement('div');
-  overlay.className = 'banner-lightbox';
-  overlay.setAttribute('role', 'dialog');
-  overlay.setAttribute('aria-modal', 'true');
-  overlay.setAttribute('aria-label', 'Independence month offer');
-  overlay.innerHTML = `
-    <div class="banner-lightbox-panel">
-      <button class="banner-lightbox-close" type="button" aria-label="Close banner" data-banner-close>&times;</button>
-      <img src="${escapeHtml(INDEPENDENCE_BANNER_URL)}" alt="Independence month special banner">
-    </div>
-  `;
-
-  const closePopup = () => {
-    overlay.remove();
-    document.removeEventListener('keydown', handleEscape);
-  };
-  const handleEscape = (event) => {
-    if (event.key === 'Escape') closePopup();
-  };
-
-  overlay.addEventListener('click', (event) => {
-    if (event.target === overlay || event.target.closest('[data-banner-close]')) {
-      closePopup();
-    }
-  });
-  document.addEventListener('keydown', handleEscape);
-  document.body.appendChild(overlay);
-  const closeButton = overlay.querySelector('[data-banner-close]');
-  if (closeButton) closeButton.focus();
 }
 
 function categoryNameFromNode(node) {
@@ -3112,7 +3053,6 @@ restoreStaticOrderSession();
 initAddToOrderMode();
 renderAddToOrderBanner();
 syncMenuFromDatabase();
-showIndependenceBannerPopup();
 renderCheckout();
 
 // Browsers restore a page from the back/forward cache without re-running scripts,
