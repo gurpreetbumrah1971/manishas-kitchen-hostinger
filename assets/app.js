@@ -168,7 +168,6 @@ const projectAssetUrl = (url) => {
 const DISCOUNT_TIERS = {
   400: 0.10,
   800: 0.15,
-  1000: 0.20,
 };
 const FRONTEND_CATEGORY_ORDER = ['Parathas', 'Frankies', 'Kebabs', 'Pakodas', 'Egg Dishes', 'Snacks', 'Beverages'];
 const FRONTEND_CATEGORY_INDEX = new Map(FRONTEND_CATEGORY_ORDER.map((name, index) => [name, index]));

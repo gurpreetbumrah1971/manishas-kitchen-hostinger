@@ -261,7 +261,7 @@ function sendOrderNotificationWhatsapp(string $orderNumber): void {
 }
 function discountRateForSubtotal(float $subtotal): float {
   // Mirrors assets/app.js's discountRateForSubtotal() and checkout.html's data-discount-tiers.
-  $tiers = ['1000' => 0.2, '800' => 0.15, '400' => 0.1];
+  $tiers = ['800' => 0.15, '400' => 0.1];
   $best = 0.0;
   foreach ($tiers as $threshold => $rate) if ($subtotal >= (float)$threshold && $rate > $best) $best = $rate;
   return $best;
