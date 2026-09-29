@@ -55,24 +55,29 @@ function adminOrder(array $order): array {
   $order['id'] = (int)$order['id'];
   foreach (['totalAmount','gstAmount','discountAmount','deliveryCharge','grandTotal','cashbackEarned','cashbackRedeemed','referralDiscount'] as $key) if (isset($order[$key])) $order[$key] = (float)$order[$key];
   if (isset($order['preparationMinutes'])) $order['preparationMinutes'] = (int)$order['preparationMinutes'];
-  $items = stmt('SELECT oi.id,oi.foodItemId,oi.quantity,oi.unitPrice,oi.subtotal,f.name,f.image FROM orderitem oi JOIN fooditem f ON f.id=oi.foodItemId WHERE oi.orderId=?', [$order['id']])->fetchAll();
+  $items = stmt('SELECT oi.id,oi.foodItemId,oi.addon,oi.quantity,oi.unitPrice,oi.subtotal,f.name,f.image FROM orderitem oi JOIN fooditem f ON f.id=oi.foodItemId WHERE oi.orderId=?', [$order['id']])->fetchAll();
   $order['orderItems'] = array_map(function (array $item): array {
-    return ['id'=>(int)$item['id'],'foodItemId'=>(int)$item['foodItemId'],'quantity'=>(int)$item['quantity'],'unitPrice'=>(float)$item['unitPrice'],'subtotal'=>(float)$item['subtotal'],'foodItem'=>['id'=>(int)$item['foodItemId'],'name'=>$item['name'],'image'=>projectUrl((string)$item['image'])]];
+    return ['id'=>(int)$item['id'],'foodItemId'=>(int)$item['foodItemId'],'addon'=>$item['addon'],'quantity'=>(int)$item['quantity'],'unitPrice'=>(float)$item['unitPrice'],'subtotal'=>(float)$item['subtotal'],'foodItem'=>['id'=>(int)$item['foodItemId'],'name'=>$item['name'].($item['addon']?' + '.$item['addon']:''),'image'=>projectUrl((string)$item['image'])]];
   }, $items);
   return $order;
 }
 function uploadedFile(string $key,array $allowed,string $folder,int $maxBytes): string { auth('admin'); if(empty($_FILES[$key])||($_FILES[$key]['error']??UPLOAD_ERR_NO_FILE)!==UPLOAD_ERR_OK) throw new RuntimeException('Please choose a file to upload.'); $file=$_FILES[$key]; if(($file['size']??0)>$maxBytes) throw new RuntimeException('The upload is too large.'); $mime=(new finfo(FILEINFO_MIME_TYPE))->file($file['tmp_name']); if(!isset($allowed[$mime])) throw new RuntimeException('This file type is not allowed.'); $dir=dirname(__DIR__).'/uploads/'.$folder; if(!is_dir($dir)&&!mkdir($dir,0755,true)&&!is_dir($dir)) throw new RuntimeException('Unable to prepare the upload directory.'); $name=bin2hex(random_bytes(16)).'.'.$allowed[$mime]; if(!move_uploaded_file($file['tmp_name'],$dir.'/'.$name)) throw new RuntimeException('Unable to save the upload.'); return projectUrl('/uploads/'.$folder.'/'.$name); }
+const CHEESE_ADDON_PRICE = 19.0;
 function orderItemsFromPayload(array $items): array {
   if (!$items) throw new RuntimeException('Order items are required');
   $resolved=[];
   foreach ($items as $item) {
-    $name=trim(preg_replace('/\s*\+\s*(?:Extra )?Cheese\s*$/i','',(string)($item['name']??'')));
+    $rawName=(string)($item['name']??'');
+    $hasCheeseAddon=(bool)preg_match('/\s*\+\s*(?:Extra )?Cheese\s*$/i',$rawName);
+    $name=trim(preg_replace('/\s*\+\s*(?:Extra )?Cheese\s*$/i','',$rawName));
     $legacyNames=['Egg Burji + 2 Pav (Single)'=>'Single Egg Burjee + 2 Butter Pav','Egg Burji + 2 Pav (Double)'=>'Double Egg Burjee + 4 Butter Pav','Egg Omelet + 2 Pav (Single)'=>'Single Egg Omelet + 2 Butter Pav','Egg Omelet + 2 Pav (Double)'=>'Double Omelet + 4 Butter Pav'];
     $name=$legacyNames[$name]??$name;
     $food=$name?stmt('SELECT * FROM fooditem WHERE name=? AND isAvailable=1',[$name])->fetch():false;
     if (!$food) throw new RuntimeException('An item in your cart is unavailable. Please refresh the menu.');
-    $quantity=max(1,(int)($item['quantity']??1)); $price=(float)$food['price'];
-    $resolved[]=['food'=>$food,'quantity'=>$quantity,'price'=>$price,'subtotal'=>round($quantity*$price,2)];
+    $quantity=max(1,(int)($item['quantity']??1));
+    $addon=$hasCheeseAddon?'Cheese':null;
+    $price=(float)$food['price']+($hasCheeseAddon?CHEESE_ADDON_PRICE:0);
+    $resolved[]=['food'=>$food,'addon'=>$addon,'quantity'=>$quantity,'price'=>$price,'subtotal'=>round($quantity*$price,2)];
   }
   return $resolved;
 }
@@ -123,7 +128,7 @@ function createOrderFromRequest(array $b): never {
     $earned=money(max(0,money($subtotal-$discount)-$redeemed)*$cashbackRate);
     $number='ORD-'.round(microtime(true)*1000); $session=bin2hex(random_bytes(24));
     stmt('INSERT INTO `order`(orderNumber,customerId,customerName,mobileNumber,whatsappNumber,email,address,tableNumber,orderType,paymentMethod,totalAmount,gstAmount,discountAmount,deliveryCharge,referralCode,referrerId,referralDiscount,cashbackRedeemed,cashbackEarned,grandTotal,customerSessionToken,customerSessionExpiresAt) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,DATE_ADD(NOW(),INTERVAL 30 MINUTE))',[$number,$customer['id'],$b['customerName']??'Guest',$customer['mobileNumber'],$b['whatsappNumber']??null,$b['email']??null,$b['address']??null,$b['tableNumber']??null,in_array($b['orderType']??'', ['DINE_IN','TAKEAWAY','DELIVERY'])?$b['orderType']:'DINE_IN',in_array($b['paymentMethod']??'', ['CASH','UPI','CARD'])?$b['paymentMethod']:'UPI',$subtotal,money($b['gstAmount']??0),$discount,$delivery,$referralCode?:null,$referrer['id']??null,$referralDiscount,$redeemed,$earned,$grand,$session]);
-    $orderId=(int)$pdo->lastInsertId(); foreach($items as $item) stmt('INSERT INTO orderitem(orderId,foodItemId,quantity,unitPrice,subtotal) VALUES(?,?,?,?,?)',[$orderId,$item['food']['id'],$item['quantity'],$item['price'],$item['subtotal']]);
+    $orderId=(int)$pdo->lastInsertId(); foreach($items as $item) stmt('INSERT INTO orderitem(orderId,foodItemId,addon,quantity,unitPrice,subtotal) VALUES(?,?,?,?,?,?)',[$orderId,$item['food']['id'],$item['addon'],$item['quantity'],$item['price'],$item['subtotal']]);
     $balance=(float)$customer['cashbackBalance']; if($redeemed>0){$balance=money($balance-$redeemed);stmt('INSERT INTO cashbacktransaction(customerId,orderId,type,amount,balanceAfter,note) VALUES(?,?,?,?,?,?)',[$customer['id'],$orderId,'REDEEMED',$redeemed,$balance,'Redeemed on order '.$number]); stmt('UPDATE customer SET cashbackBalance=? WHERE id=?',[$balance,$customer['id']]);}
     $pdo->commit();
     sendOrderNotificationEmail($number,(string)($b['customerName']??''),(string)$customer['mobileNumber'],(string)($b['orderType']??'DINE_IN'),(string)($b['paymentMethod']??'UPI'),$b['tableNumber']??null,$b['address']??null,$items,$subtotal,money($b['gstAmount']??0),$discount,$grand);
@@ -138,7 +143,7 @@ function orderNotificationRecipients(): array {
 function sendOrderNotificationEmail(string $orderNumber,string $customerName,string $mobileNumber,string $orderType,string $paymentMethod,?string $tableNumber,?string $address,array $items,float $subtotal,float $gst,float $discount,float $grand): void {
   if (RESEND_API_KEY==='' || RESEND_FROM_EMAIL==='') return;
   $money=fn($n)=>'Rs. '.number_format((float)$n,2);
-  $lines=[]; $i=1; foreach ($items as $item) { $lines[]=$i.'. '.$item['food']['name'].' x '.$item['quantity'].' - '.$money($item['subtotal']); $i++; }
+  $lines=[]; $i=1; foreach ($items as $item) { $itemName=$item['food']['name'].($item['addon']?' + '.$item['addon']:''); $lines[]=$i.'. '.$itemName.' x '.$item['quantity'].' - '.$money($item['subtotal']); $i++; }
   $text=implode("\n",array_filter([
     'New order received','',
     'Order ID: '.$orderNumber,
@@ -172,9 +177,9 @@ function sendOrderConfirmationWhatsapp(array $order): void {
   if (MSG91_AUTHKEY==='') { error_log('WhatsApp order confirmation skipped: MSG91_AUTHKEY is not configured.'); return; }
   $number=mobile($order['whatsappNumber'] ?: ($order['mobileNumber'] ?? ''));
   if (strlen($number)<10) { error_log('WhatsApp order confirmation skipped: order '.$order['orderNumber'].' has no valid WhatsApp/mobile number.'); return; }
-  $items=stmt('SELECT oi.quantity,oi.subtotal,f.name FROM orderitem oi JOIN fooditem f ON f.id=oi.foodItemId WHERE oi.orderId=?',[(int)$order['id']])->fetchAll();
+  $items=stmt('SELECT oi.quantity,oi.addon,oi.subtotal,f.name FROM orderitem oi JOIN fooditem f ON f.id=oi.foodItemId WHERE oi.orderId=?',[(int)$order['id']])->fetchAll();
   $money=fn($n)=>'Rs. '.number_format((float)$n,2);
-  $itemsSummary=implode(', ',array_map(fn($i)=>$i['quantity'].'x '.$i['name'].' ('.$money($i['subtotal']).')',$items));
+  $itemsSummary=implode(', ',array_map(fn($i)=>$i['quantity'].'x '.$i['name'].($i['addon']?' + '.$i['addon']:'').' ('.$money($i['subtotal']).')',$items));
   if ($itemsSummary==='') $itemsSummary='No items listed';
   $orderTypeLabel=str_replace('_',' ',(string)$order['orderType']);
   $context=($order['orderType']==='DINE_IN' && !empty($order['tableNumber'])) ? 'Table '.$order['tableNumber'] : $orderTypeLabel;
@@ -261,7 +266,7 @@ function sendOrderNotificationWhatsapp(string $orderNumber): void {
 }
 function discountRateForSubtotal(float $subtotal): float {
   // Mirrors assets/app.js's discountRateForSubtotal() and checkout.html's data-discount-tiers.
-  $tiers = ['800' => 0.15, '400' => 0.1];
+  $tiers = ['500' => 0.1];
   $best = 0.0;
   foreach ($tiers as $threshold => $rate) if ($subtotal >= (float)$threshold && $rate > $best) $best = $rate;
   return $best;
@@ -305,7 +310,7 @@ function createAdminOrder(array $b): never {
     stmt('INSERT INTO `order`(orderNumber,customerId,customerName,mobileNumber,address,tableNumber,orderType,paymentMethod,totalAmount,gstAmount,discountAmount,deliveryCharge,cashbackRedeemed,cashbackEarned,grandTotal,status,confirmedAt,customerSessionToken,customerSessionExpiresAt) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),?,DATE_ADD(NOW(),INTERVAL 30 MINUTE))',
       [$number, $customer['id'], $customerName, $mobileNumber, $b['address'] ?? null, $b['tableNumber'] ?? null, $orderType, $paymentMethod, $subtotal, $gst, $discount, $delivery, $redeemed, $earned, $grand, 'PENDING', $session]);
     $orderId = (int)$pdo->lastInsertId();
-    foreach ($items as $item) stmt('INSERT INTO orderitem(orderId,foodItemId,quantity,unitPrice,subtotal) VALUES(?,?,?,?,?)', [$orderId, $item['food']['id'], $item['quantity'], $item['price'], $item['subtotal']]);
+    foreach ($items as $item) stmt('INSERT INTO orderitem(orderId,foodItemId,addon,quantity,unitPrice,subtotal) VALUES(?,?,?,?,?,?)', [$orderId, $item['food']['id'], $item['addon'], $item['quantity'], $item['price'], $item['subtotal']]);
     if ($redeemed > 0) {
       $balance = money((float)$customer['cashbackBalance'] - $redeemed);
       stmt('INSERT INTO cashbacktransaction(customerId,orderId,type,amount,balanceAfter,note) VALUES(?,?,?,?,?,?)', [$customer['id'], $orderId, 'REDEEMED', $redeemed, $balance, 'Redeemed on order ' . $number]);
@@ -327,7 +332,7 @@ function addItemsToOrder(string $orderNumber, array $b): never {
   $newItems=orderItemsFromPayload($b['items']??[]);
   $pdo=db(); $pdo->beginTransaction();
   try {
-    foreach ($newItems as $item) stmt('INSERT INTO orderitem(orderId,foodItemId,quantity,unitPrice,subtotal) VALUES(?,?,?,?,?)',[$order['id'],$item['food']['id'],$item['quantity'],$item['price'],$item['subtotal']]);
+    foreach ($newItems as $item) stmt('INSERT INTO orderitem(orderId,foodItemId,addon,quantity,unitPrice,subtotal) VALUES(?,?,?,?,?,?)',[$order['id'],$item['food']['id'],$item['addon'],$item['quantity'],$item['price'],$item['subtotal']]);
     // The final food value across the whole order (not just the new items) decides which discount tier applies.
     $subtotal=money((float)stmt('SELECT COALESCE(SUM(subtotal),0) FROM orderitem WHERE orderId=?',[$order['id']])->fetchColumn());
     $gst=money($subtotal*0.05);
@@ -389,7 +394,7 @@ try {
   if ($p==='customer/request-otp' && $m==='POST') { $b=body();$n=mobile($b['mobileNumber']??'');$intent=$b['intent']??'existing';$name=trim((string)($b['name']??''));if(strlen($n)!==12)out(['error'=>'A valid 10-digit mobile number is required'],400);if(!in_array($intent,['existing','new'],true))out(['error'=>'Invalid login type.'],400);$existing=stmt('SELECT id FROM customer WHERE mobileNumber=?',[$n])->fetch();if($existing&&$intent==='new')out(['error'=>'This mobile number is already registered. Please sign in as an Existing User.','existingUser'=>true],409);if(!$existing&&$intent==='existing')out(['error'=>'This mobile number is not registered. Please choose New User and enter your name.','notRegistered'=>true],404);if($intent==='new'&&$name==='')out(['error'=>'Your name is required for a new user.'],422);if(!msg91Enabled())out(['error'=>'MSG91 OTP is not configured. Set MSG91_WIDGET_ID and MSG91_TOKEN_AUTH.'],503);$expiresAt=date(DATE_ATOM,time()+600);out(['ok'=>true,'mobileNumber'=>$n,'provider'=>'msg91','expiresAt'=>$expiresAt,'message'=>'OTP sent through MSG91.'],201); }
   if ($p==='customer/verify-otp' && $m==='POST') { $b=body();$otp=(string)($b['otp']??'');$n=mobile($b['mobileNumber']??'');$intent=$b['intent']??'existing';$name=trim((string)($b['name']??''));if(strlen($n)!==12||!in_array($intent,['existing','new'],true))out(['error'=>'Invalid login request. Please request a new OTP.'],400);try { if(!msg91Enabled()) out(['error'=>'MSG91 OTP is not configured.'],503); verifyMsg91Otp($otp,(string)($b['msg91RequestId']??'')); } catch (RuntimeException $error) { out(['error'=>$error->getMessage()],401); }$c=stmt('SELECT * FROM customer WHERE mobileNumber=?',[$n])->fetch();if($c&&$intent==='new')out(['error'=>'This mobile number is already registered. Please sign in as an Existing User.'],409);if(!$c&&$intent==='existing')out(['error'=>'This mobile number is not registered. Please choose New User.'],404);if(!$c){if($name==='')out(['error'=>'Your name is required for a new user.'],422);$c=customerFor($n,$name);}$w=wallet((int)$c['id']);out(['token'=>token(['type'=>'customer','id'=>(int)$c['id'],'mobileNumber'=>$c['mobileNumber']],2592000),'expiresAt'=>date(DATE_ATOM,time()+2592000)]+$w); }
   if ($p==='customer/wallet' && $m==='GET') { $c=auth('customer');out(wallet((int)$c['id'])); }
-  if ($p==='customer/account' && $m==='GET') { $c=auth('customer');$w=wallet((int)$c['id']);$w['orders']=stmt('SELECT id,orderNumber,grandTotal,status,orderType,paymentMethod,createdAt FROM `order` WHERE customerId=? ORDER BY createdAt DESC',[$c['id']])->fetchAll();foreach($w['orders'] as &$order){$order['id']=(int)$order['id'];$order['items']=stmt('SELECT oi.quantity,oi.unitPrice unitPrice,oi.subtotal,f.name,f.image FROM orderitem oi JOIN fooditem f ON f.id=oi.foodItemId WHERE oi.orderId=?',[$order['id']])->fetchAll();foreach($order['items'] as &$item){$item['quantity']=(int)$item['quantity'];$item['unitPrice']=(float)$item['unitPrice'];$item['subtotal']=(float)$item['subtotal'];$item['image']=projectUrl((string)$item['image']);}}out($w); }
+  if ($p==='customer/account' && $m==='GET') { $c=auth('customer');$w=wallet((int)$c['id']);$w['orders']=stmt('SELECT id,orderNumber,grandTotal,status,orderType,paymentMethod,createdAt FROM `order` WHERE customerId=? ORDER BY createdAt DESC',[$c['id']])->fetchAll();foreach($w['orders'] as &$order){$order['id']=(int)$order['id'];$order['items']=stmt('SELECT oi.quantity,oi.addon,oi.unitPrice unitPrice,oi.subtotal,f.name,f.image FROM orderitem oi JOIN fooditem f ON f.id=oi.foodItemId WHERE oi.orderId=?',[$order['id']])->fetchAll();foreach($order['items'] as &$item){$item['quantity']=(int)$item['quantity'];$item['unitPrice']=(float)$item['unitPrice'];$item['subtotal']=(float)$item['subtotal'];$item['image']=projectUrl((string)$item['image']);$item['name']=$item['name'].($item['addon']?' + '.$item['addon']:'');}}out($w); }
   if ($p==='customer/addresses' && $m==='POST') {$c=auth('customer');$b=body();if(empty($b['label'])||empty($b['address']))out(['error'=>'An address title and address are required.'],400);stmt('INSERT INTO customeraddress(customerId,label,address) VALUES(?,?,?) ON DUPLICATE KEY UPDATE address=VALUES(address)',[$c['id'],substr($b['label'],0,40),substr($b['address'],0,1000)]);out(wallet((int)$c['id']),201);}
   if (preg_match('#^customer/addresses/(\d+)$#',$p,$x)&&$m==='DELETE'){$c=auth('customer');stmt('DELETE FROM customeraddress WHERE id=? AND customerId=?',[(int)$x[1],$c['id']]);out(wallet((int)$c['id']));}
   if ($p==='admin/menu' && $m==='POST') { auth('admin');$b=body();if(empty($b['name'])||empty($b['categoryId'])||(float)($b['price']??0)<=0)out(['error'=>'Name, category and price are required'],400);stmt('INSERT INTO fooditem(categoryId,name,description,price,image,isVeg,isAvailable) VALUES(?,?,?,?,?,?,?)',[(int)$b['categoryId'],trim($b['name']),$b['description']??null,(float)$b['price'],$b['image']??null,!empty($b['isVeg']),!empty($b['isAvailable'])]);$row=stmt('SELECT f.*,c.name categoryName FROM fooditem f JOIN category c ON c.id=f.categoryId WHERE f.id=?',[db()->lastInsertId()])->fetch();out(menuRow($row),201); }

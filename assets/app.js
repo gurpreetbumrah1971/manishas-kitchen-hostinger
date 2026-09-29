@@ -166,8 +166,7 @@ const projectAssetUrl = (url) => {
     : url;
 };
 const DISCOUNT_TIERS = {
-  400: 0.10,
-  800: 0.15,
+  500: 0.10,
 };
 const FRONTEND_CATEGORY_ORDER = ['Parathas', 'Frankies', 'Kebabs', 'Pakodas', 'Egg Dishes', 'Snacks', 'Beverages'];
 const FRONTEND_CATEGORY_INDEX = new Map(FRONTEND_CATEGORY_ORDER.map((name, index) => [name, index]));
@@ -1295,6 +1294,18 @@ function initAboutParallax() {
   requestUpdate();
 }
 
+// Pilot: a food item can point its `image` field at a short looping video
+// (e.g. a subtle Ken Burns pan/zoom) instead of a still photo. Detected purely
+// by file extension so it's a one-line rollback per item (just point `image`
+// back at the original photo) with no schema or template changes needed.
+const MENU_VIDEO_EXTENSION_RE = /\.(mp4|webm)$/i;
+function menuMediaHtml(item) {
+  if (MENU_VIDEO_EXTENSION_RE.test(item.image || '')) {
+    return `<video src="${escapeHtml(item.image)}" aria-label="${escapeHtml(item.name)}" autoplay muted loop playsinline webkit-playsinline preload="auto"></video>`;
+  }
+  return `<img src="${escapeHtml(item.image)}" alt="${escapeHtml(item.name)}">`;
+}
+
 function menuCardHtml(item) {
   const cartItem = JSON.stringify({
     id: item.id,
@@ -1305,7 +1316,7 @@ function menuCardHtml(item) {
   return `
     <article class="card menu-card" data-menu-item data-name="${escapeHtml(`${item.name} ${item.description}`.toLowerCase())}" data-veg="${item.isVeg ? 'veg' : 'nonveg'}" data-bestseller="${item.bestseller ? '1' : '0'}">
       <div class="image-wrap">
-        <img src="${escapeHtml(item.image)}" alt="${escapeHtml(item.name)}">
+        ${menuMediaHtml(item)}
         <span class="badge ${item.isVeg ? 'veg' : 'nonveg'}">${item.isVeg ? 'Veg' : 'Non-Veg'}</span>
       </div>
       <div class="menu-body">

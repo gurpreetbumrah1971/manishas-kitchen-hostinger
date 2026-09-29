@@ -536,7 +536,8 @@ textarea {
     position: relative;
 }
 
-.image-wrap img {
+.image-wrap img,
+    .image-wrap video {
     width: 100%;
     height: 200px;
     object-fit: cover;
@@ -821,25 +822,9 @@ textarea {
     text-align: center;
 }
 
-.discount-offer ul {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.5rem;
-    margin: 0.5rem 0 0;
-    padding: 0;
-    list-style: none;
-}
-
-.discount-offer li {
-    display: grid;
-    place-items: center;
-    min-height: 74px;
-    padding: 0.7rem;
+.discount-offer .promo-banner {
+    margin-top: 0.5rem;
     border-radius: 8px;
-    background: #3c3c3c;
-    color: #fff;
-    font-size: 0.88rem;
-    line-height: 1.35;
 }
 
 .referral-field {
@@ -2448,7 +2433,8 @@ th {
         min-height: 100%;
     }
 
-    .menu-accordion .image-wrap img {
+    .menu-accordion .image-wrap img,
+    .menu-accordion .image-wrap video {
         width: 74px;
         height: 100%;
         min-height: 104px;
@@ -2930,7 +2916,8 @@ th {
     grid-row: 1;
 }
 
-.menu-page .image-wrap img {
+.menu-page .image-wrap img,
+    .menu-page .image-wrap video {
     width: 112px;
     height: 102px;
     border-radius: 8px;
@@ -3167,16 +3154,10 @@ th {
     background: #f8f8f8;
 }
 
-.checkout-page .discount-offer ul {
-    gap: 0.35rem;
-    margin-top: 0.3rem;
-}
-
-.checkout-page .discount-offer li {
-    min-height: 44px;
-    padding: 0.4rem 0.5rem;
+.checkout-page .discount-offer .promo-banner {
+    min-height: 30px;
+    padding: 0.4rem 0;
     font-size: 0.8rem;
-    line-height: 1.3;
 }
 
 .checkout-page .referral-field {
@@ -3315,7 +3296,9 @@ th {
     }
 
     .menu-page .menu-accordion .image-wrap img,
-    .menu-page .image-wrap img {
+    .menu-page .menu-accordion .image-wrap video,
+    .menu-page .image-wrap img,
+    .menu-page .image-wrap video {
         width: 96px;
         height: 92px;
         min-height: 0;
@@ -3453,15 +3436,8 @@ th {
         line-height: 1.35;
     }
 
-    .checkout-page .discount-offer ul {
-        grid-template-columns: 1fr;
-        gap: 0.3rem;
-        margin-top: 0.25rem;
-    }
-
-    .checkout-page .discount-offer li {
-        min-height: 40px;
-        padding: 0.45rem;
+    .checkout-page .discount-offer .promo-banner {
+        min-height: 28px;
         font-size: 0.76rem;
     }
 
