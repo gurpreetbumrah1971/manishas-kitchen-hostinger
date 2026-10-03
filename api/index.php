@@ -126,12 +126,13 @@ function createOrderFromRequest(array $b): never {
     $foodBillAfterCashback=money($beforeCashback-$redeemed); $grand=money($foodBillAfterCashback+$delivery); $cashbackRate=$referrer?0.05:0.10;
     // Cashback is earned on the bill amount only (items minus discount), never on GST or delivery.
     $earned=money(max(0,money($subtotal-$discount)-$redeemed)*$cashbackRate);
+    $specialInstructions=trim((string)($b['specialInstructions']??'')) ?: null;
     $number='ORD-'.round(microtime(true)*1000); $session=bin2hex(random_bytes(24));
-    stmt('INSERT INTO `order`(orderNumber,customerId,customerName,mobileNumber,whatsappNumber,email,address,tableNumber,orderType,paymentMethod,totalAmount,gstAmount,discountAmount,deliveryCharge,referralCode,referrerId,referralDiscount,cashbackRedeemed,cashbackEarned,grandTotal,customerSessionToken,customerSessionExpiresAt) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,DATE_ADD(NOW(),INTERVAL 30 MINUTE))',[$number,$customer['id'],$b['customerName']??'Guest',$customer['mobileNumber'],$b['whatsappNumber']??null,$b['email']??null,$b['address']??null,$b['tableNumber']??null,in_array($b['orderType']??'', ['DINE_IN','TAKEAWAY','DELIVERY'])?$b['orderType']:'DINE_IN',in_array($b['paymentMethod']??'', ['CASH','UPI','CARD'])?$b['paymentMethod']:'UPI',$subtotal,money($b['gstAmount']??0),$discount,$delivery,$referralCode?:null,$referrer['id']??null,$referralDiscount,$redeemed,$earned,$grand,$session]);
+    stmt('INSERT INTO `order`(orderNumber,customerId,customerName,mobileNumber,whatsappNumber,email,address,tableNumber,specialInstructions,orderType,paymentMethod,totalAmount,gstAmount,discountAmount,deliveryCharge,referralCode,referrerId,referralDiscount,cashbackRedeemed,cashbackEarned,grandTotal,customerSessionToken,customerSessionExpiresAt) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,DATE_ADD(NOW(),INTERVAL 30 MINUTE))',[$number,$customer['id'],$b['customerName']??'Guest',$customer['mobileNumber'],$b['whatsappNumber']??null,$b['email']??null,$b['address']??null,$b['tableNumber']??null,$specialInstructions,in_array($b['orderType']??'', ['DINE_IN','TAKEAWAY','DELIVERY'])?$b['orderType']:'DINE_IN',in_array($b['paymentMethod']??'', ['CASH','UPI','CARD'])?$b['paymentMethod']:'UPI',$subtotal,money($b['gstAmount']??0),$discount,$delivery,$referralCode?:null,$referrer['id']??null,$referralDiscount,$redeemed,$earned,$grand,$session]);
     $orderId=(int)$pdo->lastInsertId(); foreach($items as $item) stmt('INSERT INTO orderitem(orderId,foodItemId,addon,quantity,unitPrice,subtotal) VALUES(?,?,?,?,?,?)',[$orderId,$item['food']['id'],$item['addon'],$item['quantity'],$item['price'],$item['subtotal']]);
     $balance=(float)$customer['cashbackBalance']; if($redeemed>0){$balance=money($balance-$redeemed);stmt('INSERT INTO cashbacktransaction(customerId,orderId,type,amount,balanceAfter,note) VALUES(?,?,?,?,?,?)',[$customer['id'],$orderId,'REDEEMED',$redeemed,$balance,'Redeemed on order '.$number]); stmt('UPDATE customer SET cashbackBalance=? WHERE id=?',[$balance,$customer['id']]);}
     $pdo->commit();
-    sendOrderNotificationEmail($number,(string)($b['customerName']??''),(string)$customer['mobileNumber'],(string)($b['orderType']??'DINE_IN'),(string)($b['paymentMethod']??'UPI'),$b['tableNumber']??null,$b['address']??null,$items,$subtotal,money($b['gstAmount']??0),$discount,$grand);
+    sendOrderNotificationEmail($number,(string)($b['customerName']??''),(string)$customer['mobileNumber'],(string)($b['orderType']??'DINE_IN'),(string)($b['paymentMethod']??'UPI'),$b['tableNumber']??null,$b['address']??null,$items,$subtotal,money($b['gstAmount']??0),$discount,$grand,$specialInstructions);
     sendOrderNotificationWhatsapp($number);
     out(['id'=>$orderId,'orderNumber'=>$number,'grandTotal'=>$grand,'cashbackRedeemed'=>$redeemed,'cashbackEarned'=>$earned,'customerReferralCode'=>$customer['referralCode'],'referralApplied'=>(bool)$referrer,'customerSessionToken'=>$session,'customerSessionExpiresAt'=>date(DATE_ATOM,time()+1800)],201);
   } catch (Throwable $error) { if($pdo->inTransaction())$pdo->rollBack(); throw $error; }
@@ -140,7 +141,7 @@ function orderNotificationRecipients(): array {
   $configured=array_filter(array_map('trim',explode(',',ORDER_NOTIFICATION_RECIPIENTS)));
   return $configured ?: ['gurpreet.bumrah@gmail.com','manishaskitchen2026@gmail.com','aryanchavan131@gmail.com'];
 }
-function sendOrderNotificationEmail(string $orderNumber,string $customerName,string $mobileNumber,string $orderType,string $paymentMethod,?string $tableNumber,?string $address,array $items,float $subtotal,float $gst,float $discount,float $grand): void {
+function sendOrderNotificationEmail(string $orderNumber,string $customerName,string $mobileNumber,string $orderType,string $paymentMethod,?string $tableNumber,?string $address,array $items,float $subtotal,float $gst,float $discount,float $grand,?string $specialInstructions=null): void {
   if (RESEND_API_KEY==='' || RESEND_FROM_EMAIL==='') return;
   $money=fn($n)=>'Rs. '.number_format((float)$n,2);
   $lines=[]; $i=1; foreach ($items as $item) { $itemName=$item['food']['name'].($item['addon']?' + '.$item['addon']:''); $lines[]=$i.'. '.$itemName.' x '.$item['quantity'].' - '.$money($item['subtotal']); $i++; }
@@ -157,6 +158,7 @@ function sendOrderNotificationEmail(string $orderNumber,string $customerName,str
     'GST: '.$money($gst),
     'Discount: '.$money($discount),
     'Grand total: '.$money($grand),
+    $specialInstructions?"\nSpecial instructions: $specialInstructions":'',
   ],fn($v)=>$v!==''));
   $payload=json_encode(['from'=>RESEND_FROM_EMAIL,'to'=>orderNotificationRecipients(),'subject'=>"New order $orderNumber - ".$money($grand),'text'=>$text]);
   $headers=['Authorization: Bearer '.RESEND_API_KEY,'Content-Type: application/json'];
@@ -266,7 +268,7 @@ function sendOrderNotificationWhatsapp(string $orderNumber): void {
 }
 function discountRateForSubtotal(float $subtotal): float {
   // Mirrors assets/app.js's discountRateForSubtotal() and checkout.html's data-discount-tiers.
-  $tiers = ['500' => 0.1];
+  $tiers = ['500' => 0.05, '1000' => 0.1];
   $best = 0.0;
   foreach ($tiers as $threshold => $rate) if ($subtotal >= (float)$threshold && $rate > $best) $best = $rate;
   return $best;

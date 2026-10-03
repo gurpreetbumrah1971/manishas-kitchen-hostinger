@@ -166,7 +166,8 @@ const projectAssetUrl = (url) => {
     : url;
 };
 const DISCOUNT_TIERS = {
-  500: 0.10,
+  500: 0.05,
+  1000: 0.10,
 };
 const FRONTEND_CATEGORY_ORDER = ['Parathas', 'Frankies', 'Kebabs', 'Pakodas', 'Egg Dishes', 'Snacks', 'Beverages'];
 const FRONTEND_CATEGORY_INDEX = new Map(FRONTEND_CATEGORY_ORDER.map((name, index) => [name, index]));
@@ -2629,6 +2630,7 @@ if (checkoutForm) checkoutForm.addEventListener('submit', async (event) => {
       mobileNumber: number,
       whatsappNumber: number,
       address: deliveryAddress,
+      specialInstructions: String(formData.get('special_instructions') || '').trim() || null,
       studentInstitution: studentDiscountDetails().eligible ? studentDiscountDetails().institution : null,
       studentGrade: studentDiscountDetails().eligible ? studentDiscountDetails().grade : null,
       referralCode: appliedReferralCode() || null,
