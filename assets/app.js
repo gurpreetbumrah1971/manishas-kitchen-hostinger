@@ -2630,7 +2630,7 @@ if (checkoutForm) checkoutForm.addEventListener('submit', async (event) => {
       mobileNumber: number,
       whatsappNumber: number,
       address: deliveryAddress,
-      specialInstructions: String(formData.get('special_instructions') || '').trim() || null,
+      specialInstructions: String((document.querySelector('[data-special-instructions]') || {}).value || '').trim() || null,
       studentInstitution: studentDiscountDetails().eligible ? studentDiscountDetails().institution : null,
       studentGrade: studentDiscountDetails().eligible ? studentDiscountDetails().grade : null,
       referralCode: appliedReferralCode() || null,

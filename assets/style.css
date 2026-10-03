@@ -1026,6 +1026,32 @@ textarea {
     border-color: #17834a;
 }
 
+.special-instructions-field {
+    display: grid;
+    gap: 6px;
+    margin-bottom: 1rem;
+    font-weight: 700;
+    font-size: 0.85rem;
+}
+
+.special-instructions-field textarea {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.65rem 0.75rem;
+    border: 1px solid #dedede;
+    border-radius: 8px;
+    background: #fafafa;
+    font-size: 1rem;
+    font-family: inherit;
+    color: inherit;
+    resize: vertical;
+}
+
+.special-instructions-field textarea:focus {
+    outline: none;
+    border-color: #17834a;
+}
+
 .delivery-type-field,
 .delivery-location-field {
     margin-bottom: 1rem;
