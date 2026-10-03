@@ -21,4 +21,11 @@ return [
   // restaurant numbers baked into config.php if not set here.
   // 'MSG91_WHATSAPP_NOTIFICATION_TEMPLATE' => 'order_notification',
   // 'ORDER_NOTIFICATION_WHATSAPP_RECIPIENTS' => '9819068372,8879630082,9076241129',
+  // Shared cashback wallet database (u515749657_combowallet), also used by
+  // doodees.food. WALLET_DB_USER/PASS is the dedicated u515749657_Cashback
+  // credential, NOT this site's own DB_USER/DB_PASS above.
+  'WALLET_DB_HOST' => 'localhost',
+  'WALLET_DB_NAME' => 'u515749657_combowallet',
+  'WALLET_DB_USER' => 'u515749657_Cashback',
+  'WALLET_DB_PASS' => 'paste-the-wallet-db-password',
 ];

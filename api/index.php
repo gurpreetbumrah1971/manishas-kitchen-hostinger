@@ -49,8 +49,65 @@ function menuRow(array $r, array $bestsellerIds = []): array { $r['id']=(int)$r[
 // The top 5 items by number of distinct orders that included them, excluding cancelled orders.
 function bestsellerFoodItemIds(int $limit = 5): array { $rows=stmt("SELECT oi.foodItemId, COUNT(DISTINCT oi.orderId) orderCount FROM orderitem oi JOIN `order` o ON o.id=oi.orderId WHERE o.status<>'CANCELLED' GROUP BY oi.foodItemId ORDER BY orderCount DESC LIMIT ".(int)$limit)->fetchAll(); return array_map(fn($r) => (int)$r['foodItemId'], $rows); }
 function customerFor(string $mobileNumber,string $name=''): array { $p=db(); $s=stmt('SELECT * FROM customer WHERE mobileNumber=?',[$mobileNumber]); $c=$s->fetch(); if (!$c) { $code='MK'.strtoupper(substr(bin2hex(random_bytes(5)),0,8)); stmt('INSERT INTO customer(mobileNumber,name,referralCode) VALUES(?,?,?)',[$mobileNumber,$name?:null,$code]); $c=stmt('SELECT * FROM customer WHERE id=?',[$p->lastInsertId()])->fetch(); } elseif ($name) { stmt('UPDATE customer SET name=? WHERE id=?',[$name,$c['id']]); $c['name']=$name; } return $c; }
-function wallet(int $id): array { $c=stmt('SELECT id,mobileNumber,name,birthday,anniversary,referralCode,cashbackBalance FROM customer WHERE id=?',[$id])->fetch(); if (!$c) out(['error'=>'Customer not found'],404); $c['id']=(int)$c['id'];$c['cashbackBalance']=(float)$c['cashbackBalance']; $c['savedAddresses']=stmt('SELECT id,label,address FROM customeraddress WHERE customerId=? ORDER BY updatedAt DESC',[$id])->fetchAll(); $tx=stmt('SELECT ct.id,ct.type,ct.amount,ct.balanceAfter balanceAfter,ct.note,ct.createdAt createdAt,o.orderNumber orderNumber FROM cashbacktransaction ct LEFT JOIN `order` o ON o.id=ct.orderId WHERE ct.customerId=? ORDER BY ct.createdAt DESC,ct.id DESC LIMIT 50',[$id])->fetchAll(); foreach($tx as &$row){$row['id']=(int)$row['id'];$row['amount']=(float)$row['amount'];$row['balanceAfter']=(float)$row['balanceAfter'];} return ['customer'=>$c,'transactions'=>$tx]; }
-function adminCustomer(int $id): array { $row=stmt('SELECT id,mobileNumber number,name,birthday,anniversary,referralCode referralCode,cashbackBalance,createdAt createdAt,updatedAt updatedAt FROM customer WHERE id=?',[$id])->fetch(); if(!$row) throw new RuntimeException('Customer not found'); $row['id']=(int)$row['id'];$row['cashbackBalance']=(float)$row['cashbackBalance'];$row['orders']=stmt('SELECT id,orderNumber,orderType,status,grandTotal,createdAt,address FROM `order` WHERE customerId=? ORDER BY createdAt DESC',[$id])->fetchAll();$row['deliveryAddresses']=stmt("SELECT address FROM `order` WHERE customerId=? AND address IS NOT NULL AND address<>'' GROUP BY address ORDER BY MAX(createdAt) DESC",[$id])->fetchAll(PDO::FETCH_COLUMN);$row['totalSpent']=money(array_sum(array_map(fn($order)=>(float)$order['grandTotal'],$row['orders'])));$row['firstOrderAt']=count($row['orders'])?end($row['orders'])['createdAt']:null;$row['latestOrderAt']=count($row['orders'])?$row['orders'][0]['createdAt']:null;return $row; }
+// Centralized cashback wallet, shared with doodees.food via a second database
+// connection (see config.php's walletDb()) keyed by mobileNumber. Local
+// `customer.cashbackBalance`/`cashbacktransaction` are no longer written to -
+// they're kept only as a historical record of balances before centralization.
+const WALLET_SITE_NAME = 'manishas-kitchen';
+function walletStmt(string $sql, array $params = []): PDOStatement { $s=walletDb()->prepare($sql); $s->execute($params); return $s; }
+function walletCustomerFor(string $mobileNumber, string $name = ''): array {
+  $c=walletStmt('SELECT * FROM wallet_customer WHERE mobileNumber=?',[$mobileNumber])->fetch();
+  if (!$c) { walletStmt('INSERT INTO wallet_customer(mobileNumber,name) VALUES(?,?)',[$mobileNumber,$name?:null]); $c=walletStmt('SELECT * FROM wallet_customer WHERE id=?',[walletDb()->lastInsertId()])->fetch(); }
+  elseif ($name && !$c['name']) { walletStmt('UPDATE wallet_customer SET name=? WHERE id=?',[$name,$c['id']]); $c['name']=$name; }
+  return $c;
+}
+// Safe to call even if the wallet DB is unreachable: logs and returns 0, so
+// wallet downtime blocks cashback redemption rather than checkout itself.
+function walletBalanceFor(string $mobileNumber): float {
+  try { return (float)(walletStmt('SELECT cashbackBalance FROM wallet_customer WHERE mobileNumber=?',[$mobileNumber])->fetchColumn() ?: 0); }
+  catch (Throwable $e) { error_log('Wallet balance lookup failed for '.$mobileNumber.': '.$e->getMessage()); return 0.0; }
+}
+// Applies a signed delta (+earn, -redeem) to the shared wallet and logs a
+// ledger row. Swallows failures (logs instead) so wallet-DB downtime never
+// blocks an order that has already been committed locally.
+function walletApply(string $mobileNumber, string $name, float $delta, string $type, ?string $orderNumber, string $note): void {
+  if ($delta == 0) return;
+  try {
+    $wc=walletCustomerFor($mobileNumber,$name);
+    $balance=money((float)$wc['cashbackBalance']+$delta);
+    walletStmt('UPDATE wallet_customer SET cashbackBalance=? WHERE id=?',[$balance,$wc['id']]);
+    walletStmt('INSERT INTO wallet_transaction(walletCustomerId,site,siteOrderReference,type,amount,balanceAfter,note) VALUES(?,?,?,?,?,?,?)',[$wc['id'],WALLET_SITE_NAME,$orderNumber,$type,abs($delta),$balance,$note]);
+  } catch (Throwable $e) { error_log('Wallet update failed for '.$mobileNumber.' ('.$type.' '.$delta.', order '.$orderNumber.'): '.$e->getMessage()); }
+}
+// Reverses this site's wallet effects for one order (used when an admin
+// deletes an order), without touching the customer's other orders or their
+// activity on the other site.
+function walletReverseForOrder(string $orderNumber): void {
+  try {
+    $rows=walletStmt("SELECT walletCustomerId, SUM(CASE WHEN type='REDEEMED' THEN -amount ELSE amount END) net FROM wallet_transaction WHERE site=? AND siteOrderReference=? GROUP BY walletCustomerId",[WALLET_SITE_NAME,$orderNumber])->fetchAll();
+    foreach ($rows as $row) {
+      $walletCustomerId=(int)$row['walletCustomerId']; $net=(float)$row['net'];
+      if ($net == 0) continue;
+      $current=(float)walletStmt('SELECT cashbackBalance FROM wallet_customer WHERE id=?',[$walletCustomerId])->fetchColumn();
+      $balance=money($current-$net);
+      walletStmt('UPDATE wallet_customer SET cashbackBalance=? WHERE id=?',[$balance,$walletCustomerId]);
+      walletStmt('INSERT INTO wallet_transaction(walletCustomerId,site,siteOrderReference,type,amount,balanceAfter,note) VALUES(?,?,?,?,?,?,?)',[$walletCustomerId,WALLET_SITE_NAME,$orderNumber,'ADJUSTED',-$net,$balance,'Reversal: order '.$orderNumber.' deleted']);
+    }
+  } catch (Throwable $e) { error_log('Wallet reversal failed for order '.$orderNumber.': '.$e->getMessage()); }
+}
+function wallet(int $id): array {
+  $c=stmt('SELECT id,mobileNumber,name,birthday,anniversary,referralCode FROM customer WHERE id=?',[$id])->fetch();
+  if (!$c) out(['error'=>'Customer not found'],404);
+  $c['id']=(int)$c['id'];
+  $c['cashbackBalance']=walletBalanceFor($c['mobileNumber']);
+  $c['savedAddresses']=stmt('SELECT id,label,address FROM customeraddress WHERE customerId=? ORDER BY updatedAt DESC',[$id])->fetchAll();
+  $tx=[];
+  try { $tx=walletStmt('SELECT wt.id,wt.type,wt.amount,wt.balanceAfter balanceAfter,wt.note,wt.createdAt createdAt,wt.siteOrderReference orderNumber FROM wallet_transaction wt JOIN wallet_customer wc ON wc.id=wt.walletCustomerId WHERE wc.mobileNumber=? ORDER BY wt.createdAt DESC,wt.id DESC LIMIT 50',[$c['mobileNumber']])->fetchAll(); }
+  catch (Throwable $e) { error_log('Wallet transaction history lookup failed for '.$c['mobileNumber'].': '.$e->getMessage()); }
+  foreach($tx as &$row){$row['id']=(int)$row['id'];$row['amount']=(float)$row['amount'];$row['balanceAfter']=(float)$row['balanceAfter'];}
+  return ['customer'=>$c,'transactions'=>$tx];
+}
+function adminCustomer(int $id): array { $row=stmt('SELECT id,mobileNumber number,name,birthday,anniversary,referralCode referralCode,createdAt createdAt,updatedAt updatedAt FROM customer WHERE id=?',[$id])->fetch(); if(!$row) throw new RuntimeException('Customer not found'); $row['id']=(int)$row['id'];$row['cashbackBalance']=walletBalanceFor($row['number']);$row['orders']=stmt('SELECT id,orderNumber,orderType,status,grandTotal,createdAt,address FROM `order` WHERE customerId=? ORDER BY createdAt DESC',[$id])->fetchAll();$row['deliveryAddresses']=stmt("SELECT address FROM `order` WHERE customerId=? AND address IS NOT NULL AND address<>'' GROUP BY address ORDER BY MAX(createdAt) DESC",[$id])->fetchAll(PDO::FETCH_COLUMN);$row['totalSpent']=money(array_sum(array_map(fn($order)=>(float)$order['grandTotal'],$row['orders'])));$row['firstOrderAt']=count($row['orders'])?end($row['orders'])['createdAt']:null;$row['latestOrderAt']=count($row['orders'])?$row['orders'][0]['createdAt']:null;return $row; }
 function adminOrder(array $order): array {
   $order['id'] = (int)$order['id'];
   foreach (['totalAmount','gstAmount','discountAmount','deliveryCharge','grandTotal','cashbackEarned','cashbackRedeemed','referralDiscount'] as $key) if (isset($order[$key])) $order[$key] = (float)$order[$key];
@@ -119,10 +176,10 @@ function createOrderFromRequest(array $b): never {
     $items=orderItemsFromPayload($b['items']??[]); $subtotal=array_sum(array_column($items,'subtotal'));
     $delivery=deliveryChargeForOrder($subtotal,(string)($b['orderType']??''),(string)($b['locality']??''),(string)($b['sector']??''),(string)($b['customLocation']??''));
     $discount=money($b['discountAmount']??0); $referralCode=strtoupper(trim((string)($b['referralCode']??''))); $referrer=null; $referralDiscount=0;
-    if ($referralCode !== '') { $referrer=stmt('SELECT id,cashbackBalance FROM customer WHERE referralCode=?',[$referralCode])->fetch(); $prior=(int)stmt('SELECT COUNT(*) FROM `order` WHERE customerId=?',[$customer['id']])->fetchColumn(); if (!$referrer || (int)$referrer['id']===(int)$customer['id'] || $prior>0) { $referrer=null; $referralCode=''; } else { $referralDiscount=money($subtotal*0.05); $discount=money($discount+$referralDiscount); } }
+    if ($referralCode !== '') { $referrer=stmt('SELECT id FROM customer WHERE referralCode=?',[$referralCode])->fetch(); $prior=(int)stmt('SELECT COUNT(*) FROM `order` WHERE customerId=?',[$customer['id']])->fetchColumn(); if (!$referrer || (int)$referrer['id']===(int)$customer['id'] || $prior>0) { $referrer=null; $referralCode=''; } else { $referralDiscount=money($subtotal*0.05); $discount=money($discount+$referralDiscount); } }
     $beforeCashback=money($subtotal+money($b['gstAmount']??0)-$discount);
     $requested=money($b['cashbackRedeemAmount']??0);
-    $redeemed=min($requested,(float)$customer['cashbackBalance'],$beforeCashback);
+    $redeemed=min($requested,walletBalanceFor($customer['mobileNumber']),$beforeCashback);
     $foodBillAfterCashback=money($beforeCashback-$redeemed); $grand=money($foodBillAfterCashback+$delivery); $cashbackRate=$referrer?0.05:0.10;
     // Cashback is earned on the bill amount only (items minus discount), never on GST or delivery.
     $earned=money(max(0,money($subtotal-$discount)-$redeemed)*$cashbackRate);
@@ -130,8 +187,8 @@ function createOrderFromRequest(array $b): never {
     $number='ORD-'.round(microtime(true)*1000); $session=bin2hex(random_bytes(24));
     stmt('INSERT INTO `order`(orderNumber,customerId,customerName,mobileNumber,whatsappNumber,email,address,tableNumber,specialInstructions,orderType,paymentMethod,totalAmount,gstAmount,discountAmount,deliveryCharge,referralCode,referrerId,referralDiscount,cashbackRedeemed,cashbackEarned,grandTotal,customerSessionToken,customerSessionExpiresAt) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,DATE_ADD(NOW(),INTERVAL 30 MINUTE))',[$number,$customer['id'],$b['customerName']??'Guest',$customer['mobileNumber'],$b['whatsappNumber']??null,$b['email']??null,$b['address']??null,$b['tableNumber']??null,$specialInstructions,in_array($b['orderType']??'', ['DINE_IN','TAKEAWAY','DELIVERY'])?$b['orderType']:'DINE_IN',in_array($b['paymentMethod']??'', ['CASH','UPI','CARD'])?$b['paymentMethod']:'UPI',$subtotal,money($b['gstAmount']??0),$discount,$delivery,$referralCode?:null,$referrer['id']??null,$referralDiscount,$redeemed,$earned,$grand,$session]);
     $orderId=(int)$pdo->lastInsertId(); foreach($items as $item) stmt('INSERT INTO orderitem(orderId,foodItemId,addon,quantity,unitPrice,subtotal) VALUES(?,?,?,?,?,?)',[$orderId,$item['food']['id'],$item['addon'],$item['quantity'],$item['price'],$item['subtotal']]);
-    $balance=(float)$customer['cashbackBalance']; if($redeemed>0){$balance=money($balance-$redeemed);stmt('INSERT INTO cashbacktransaction(customerId,orderId,type,amount,balanceAfter,note) VALUES(?,?,?,?,?,?)',[$customer['id'],$orderId,'REDEEMED',$redeemed,$balance,'Redeemed on order '.$number]); stmt('UPDATE customer SET cashbackBalance=? WHERE id=?',[$balance,$customer['id']]);}
     $pdo->commit();
+    if ($redeemed>0) walletApply($customer['mobileNumber'],(string)($b['customerName']??$customer['name']??''),-$redeemed,'REDEEMED',$number,'Redeemed on order '.$number);
     sendOrderNotificationEmail($number,(string)($b['customerName']??''),(string)$customer['mobileNumber'],(string)($b['orderType']??'DINE_IN'),(string)($b['paymentMethod']??'UPI'),$b['tableNumber']??null,$b['address']??null,$items,$subtotal,money($b['gstAmount']??0),$discount,$grand,$specialInstructions);
     sendOrderNotificationWhatsapp($number);
     out(['id'=>$orderId,'orderNumber'=>$number,'grandTotal'=>$grand,'cashbackRedeemed'=>$redeemed,'cashbackEarned'=>$earned,'customerReferralCode'=>$customer['referralCode'],'referralApplied'=>(bool)$referrer,'customerSessionToken'=>$session,'customerSessionExpiresAt'=>date(DATE_ATOM,time()+1800)],201);
@@ -276,13 +333,31 @@ function discountRateForSubtotal(float $subtotal): float {
 function syncCashbackForOrder(int $orderId): void {
   // Delta-based so it is safe to call both right after confirmation and again
   // after later item additions increase cashbackEarned - it only ever tops up
-  // the difference, never re-credits what was already paid out.
+  // the difference, never re-credits what was already paid out. Credited
+  // amounts are tracked against the shared wallet's own ledger (filtered to
+  // this site + order), not the legacy local cashbacktransaction table.
   $order=stmt('SELECT * FROM `order` WHERE id=?',[$orderId])->fetch();
   if (!$order || empty($order['confirmedAt'])) return;
-  $creditedSoFar=(float)stmt("SELECT COALESCE(SUM(amount),0) FROM cashbacktransaction WHERE orderId=? AND type='EARNED' AND customerId=?",[$orderId,$order['customerId']])->fetchColumn();
-  $due=money((float)$order['cashbackEarned']-$creditedSoFar);
-  if ($due>0 && $order['customerId']) { $customer=stmt('SELECT cashbackBalance FROM customer WHERE id=?',[$order['customerId']])->fetch(); if ($customer) { $balance=money((float)$customer['cashbackBalance']+$due); stmt('UPDATE customer SET cashbackBalance=? WHERE id=?',[$balance,$order['customerId']]); stmt('INSERT INTO cashbacktransaction(customerId,orderId,type,amount,balanceAfter,note) VALUES(?,?,?,?,?,?)',[$order['customerId'],$orderId,'EARNED',$due,$balance,'Cashback credited for order '.$order['orderNumber']]); } }
-  if (!empty($order['referrerId'])) { $referrerBillAmount=money(max(0,(float)$order['totalAmount']-(float)$order['discountAmount'])); $rewardDue=money($referrerBillAmount*0.05); $referrerCreditedSoFar=(float)stmt("SELECT COALESCE(SUM(amount),0) FROM cashbacktransaction WHERE orderId=? AND type='EARNED' AND customerId=?",[$orderId,$order['referrerId']])->fetchColumn(); $referrerDue=money($rewardDue-$referrerCreditedSoFar); if ($referrerDue>0) { $referrer=stmt('SELECT cashbackBalance FROM customer WHERE id=?',[$order['referrerId']])->fetch(); if ($referrer) { $balance=money((float)$referrer['cashbackBalance']+$referrerDue); stmt('UPDATE customer SET cashbackBalance=? WHERE id=?',[$balance,$order['referrerId']]); stmt('INSERT INTO cashbacktransaction(customerId,orderId,type,amount,balanceAfter,note) VALUES(?,?,?,?,?,?)',[$order['referrerId'],$orderId,'EARNED',$referrerDue,$balance,'Referral cashback credited for order '.$order['orderNumber']]); } } }
+  $customer = $order['customerId'] ? stmt('SELECT mobileNumber,name FROM customer WHERE id=?',[$order['customerId']])->fetch() : null;
+  if ($customer) {
+    $creditedSoFar=0.0;
+    try { $creditedSoFar=(float)walletStmt("SELECT COALESCE(SUM(wt.amount),0) FROM wallet_transaction wt JOIN wallet_customer wc ON wc.id=wt.walletCustomerId WHERE wc.mobileNumber=? AND wt.site=? AND wt.siteOrderReference=? AND wt.type='EARNED'",[$customer['mobileNumber'],WALLET_SITE_NAME,$order['orderNumber']])->fetchColumn(); }
+    catch (Throwable $e) { error_log('Wallet earned-so-far lookup failed for order '.$order['orderNumber'].': '.$e->getMessage()); $creditedSoFar=(float)$order['cashbackEarned']; }
+    $due=money((float)$order['cashbackEarned']-$creditedSoFar);
+    if ($due>0) walletApply($customer['mobileNumber'],(string)($customer['name']??''),$due,'EARNED',$order['orderNumber'],'Cashback credited for order '.$order['orderNumber']);
+  }
+  if (!empty($order['referrerId'])) {
+    $referrer=stmt('SELECT mobileNumber,name FROM customer WHERE id=?',[$order['referrerId']])->fetch();
+    if ($referrer) {
+      $referrerBillAmount=money(max(0,(float)$order['totalAmount']-(float)$order['discountAmount']));
+      $rewardDue=money($referrerBillAmount*0.05);
+      $referrerCreditedSoFar=0.0;
+      try { $referrerCreditedSoFar=(float)walletStmt("SELECT COALESCE(SUM(wt.amount),0) FROM wallet_transaction wt JOIN wallet_customer wc ON wc.id=wt.walletCustomerId WHERE wc.mobileNumber=? AND wt.site=? AND wt.siteOrderReference=? AND wt.type='EARNED' AND wt.note LIKE 'Referral%'",[$referrer['mobileNumber'],WALLET_SITE_NAME,$order['orderNumber']])->fetchColumn(); }
+      catch (Throwable $e) { error_log('Wallet referral-credited-so-far lookup failed for order '.$order['orderNumber'].': '.$e->getMessage()); $referrerCreditedSoFar=$rewardDue; }
+      $referrerDue=money($rewardDue-$referrerCreditedSoFar);
+      if ($referrerDue>0) walletApply($referrer['mobileNumber'],(string)($referrer['name']??''),$referrerDue,'EARNED',$order['orderNumber'],'Referral cashback credited for order '.$order['orderNumber']);
+    }
+  }
 }
 function createAdminOrder(array $b): never {
   auth('admin');
@@ -302,7 +377,7 @@ function createAdminOrder(array $b): never {
     $discount = money($subtotal * discountRateForSubtotal($subtotal));
     $beforeCashback = money($subtotal + $gst - $discount);
     $requested = money($b['cashbackRedeemAmount'] ?? 0);
-    $redeemed = min($requested, (float)$customer['cashbackBalance'], $beforeCashback);
+    $redeemed = min($requested, walletBalanceFor($mobileNumber), $beforeCashback);
     $foodBillAfterCashback = money($beforeCashback - $redeemed);
     // Cashback is earned on the bill amount only (items minus discount), never on GST or delivery.
     $earned = money(max(0, money($subtotal - $discount) - $redeemed) * 0.10);
@@ -313,12 +388,8 @@ function createAdminOrder(array $b): never {
       [$number, $customer['id'], $customerName, $mobileNumber, $b['address'] ?? null, $b['tableNumber'] ?? null, $orderType, $paymentMethod, $subtotal, $gst, $discount, $delivery, $redeemed, $earned, $grand, 'PENDING', $session]);
     $orderId = (int)$pdo->lastInsertId();
     foreach ($items as $item) stmt('INSERT INTO orderitem(orderId,foodItemId,addon,quantity,unitPrice,subtotal) VALUES(?,?,?,?,?,?)', [$orderId, $item['food']['id'], $item['addon'], $item['quantity'], $item['price'], $item['subtotal']]);
-    if ($redeemed > 0) {
-      $balance = money((float)$customer['cashbackBalance'] - $redeemed);
-      stmt('INSERT INTO cashbacktransaction(customerId,orderId,type,amount,balanceAfter,note) VALUES(?,?,?,?,?,?)', [$customer['id'], $orderId, 'REDEEMED', $redeemed, $balance, 'Redeemed on order ' . $number]);
-      stmt('UPDATE customer SET cashbackBalance=? WHERE id=?', [$balance, $customer['id']]);
-    }
     $pdo->commit();
+    if ($redeemed > 0) walletApply($mobileNumber, $customerName, -$redeemed, 'REDEEMED', $number, 'Redeemed on order ' . $number);
     syncCashbackForOrder($orderId);
     $order = stmt('SELECT * FROM `order` WHERE id=?', [$orderId])->fetch();
     sendOrderConfirmationWhatsapp($order);
@@ -407,13 +478,13 @@ try {
   if ($p==='admin/uploads/campaign-media' && $m==='POST') out(['mediaUrl'=>uploadedFile('media',['image/jpeg'=>'jpg','image/png'=>'png','image/webp'=>'webp','image/gif'=>'gif','video/mp4'=>'mp4','video/webm'=>'webm'],'campaign',25*1024*1024)],201);
   if ($p==='admin/customers' && $m==='POST') {auth('admin');$b=body();$number=mobile($b['number']??$b['mobileNumber']??'');if(strlen($number)<10)out(['error'=>'A valid mobile number is required'],422);$existing=stmt('SELECT id FROM customer WHERE mobileNumber=?',[$number])->fetch();if($existing)out(['error'=>'A customer with this number already exists'],409);$code='MK'.strtoupper(substr(bin2hex(random_bytes(5)),0,8));stmt('INSERT INTO customer(mobileNumber,name,birthday,anniversary,referralCode) VALUES(?,?,?,?,?)',[$number,trim((string)($b['name']??''))?:null,$b['birthday']?:null,$b['anniversary']?:null,$code]);out(adminCustomer((int)db()->lastInsertId()),201);}
   if (preg_match('#^admin/customers/(\d+)$#',$p,$x)&&$m==='PATCH') {auth('admin');$b=body();$id=(int)$x[1];$exists=stmt('SELECT id FROM customer WHERE id=?',[$id])->fetch();if(!$exists)out(['error'=>'Customer not found'],404);$number=mobile($b['number']??$b['mobileNumber']??'');if(strlen($number)<10)out(['error'=>'A valid mobile number is required'],422);try{stmt('UPDATE customer SET mobileNumber=?,name=?,birthday=?,anniversary=? WHERE id=?',[$number,trim((string)($b['name']??''))?:null,$b['birthday']?:null,$b['anniversary']?:null,$id]);}catch(PDOException $e){out(['error'=>'A customer with this number already exists'],409);}out(adminCustomer($id));}
-  if (preg_match('#^admin/customers/(\d+)/cashback$#',$p,$x)&&$m==='POST') {auth('admin');$b=body();$id=(int)$x[1];$amount=round((float)($b['amount']??0),2);if($amount==0)out(['error'=>'Enter a non-zero cashback amount'],422);$customer=stmt('SELECT cashbackBalance FROM customer WHERE id=?',[$id])->fetch();if(!$customer)out(['error'=>'Customer not found'],404);$balance=round(max(0,(float)$customer['cashbackBalance']+$amount),2);$actual=$balance-(float)$customer['cashbackBalance'];if($actual==0)out(['error'=>'Cashback balance cannot be negative'],422);stmt('UPDATE customer SET cashbackBalance=? WHERE id=?',[$balance,$id]);stmt('INSERT INTO cashbacktransaction(customerId,type,amount,balanceAfter,note) VALUES(?,?,?,?,?)',[$id,'ADJUSTED',$actual,$balance,trim((string)($b['note']??''))?:'Admin cashback adjustment']);out(adminCustomer($id));}
+  if (preg_match('#^admin/customers/(\d+)/cashback$#',$p,$x)&&$m==='POST') {auth('admin');$b=body();$id=(int)$x[1];$amount=round((float)($b['amount']??0),2);if($amount==0)out(['error'=>'Enter a non-zero cashback amount'],422);$customer=stmt('SELECT mobileNumber,name FROM customer WHERE id=?',[$id])->fetch();if(!$customer)out(['error'=>'Customer not found'],404);$wc=walletCustomerFor($customer['mobileNumber'],(string)($customer['name']??''));$balance=round(max(0,(float)$wc['cashbackBalance']+$amount),2);$actual=$balance-(float)$wc['cashbackBalance'];if($actual==0)out(['error'=>'Cashback balance cannot be negative'],422);walletStmt('UPDATE wallet_customer SET cashbackBalance=? WHERE id=?',[$balance,$wc['id']]);walletStmt('INSERT INTO wallet_transaction(walletCustomerId,site,type,amount,balanceAfter,note) VALUES(?,?,?,?,?,?)',[$wc['id'],WALLET_SITE_NAME,'ADJUSTED',$actual,$balance,trim((string)($b['note']??''))?:'Admin cashback adjustment']);out(adminCustomer($id));}
   if ($p==='admin/customers' && $m==='GET') {auth('admin');$ids=stmt('SELECT id FROM customer ORDER BY updatedAt DESC')->fetchAll(PDO::FETCH_COLUMN);out(array_map(fn($id)=>adminCustomer((int)$id),$ids));}
   if ($p==='admin/orders' && $m==='GET') {auth('admin');$orders=stmt('SELECT * FROM `order` ORDER BY createdAt DESC')->fetchAll();out(array_map('adminOrder',$orders));}
   if ($p==='admin/orders' && $m==='POST') createAdminOrder(body());
   if ($p==='admin/export/orders' && $m==='GET') {auth('admin');header('Content-Type: text/csv; charset=utf-8');header('Content-Disposition: attachment; filename="orders-export-'.date('Y-m-d').'.csv"');$out=fopen('php://output','w');fputcsv($out,['Order ID','Order Number','Timestamp','Customer','Mobile','WhatsApp','Address','Table','Subtotal','GST','Discount','Cashback Redeemed','Cashback Earned','Grand Total','Status','Order Type','Payment Method']);$orders=stmt('SELECT id,orderNumber,createdAt,customerName,mobileNumber,whatsappNumber,address,tableNumber,totalAmount,gstAmount,discountAmount,cashbackRedeemed,cashbackEarned,grandTotal,status,orderType,paymentMethod FROM `order` ORDER BY createdAt DESC')->fetchAll();foreach($orders as $o){fputcsv($out,[$o['id'],$o['orderNumber'],$o['createdAt'],$o['customerName'],$o['mobileNumber'],$o['whatsappNumber'],$o['address'],$o['tableNumber'],$o['totalAmount'],$o['gstAmount'],$o['discountAmount'],$o['cashbackRedeemed'],$o['cashbackEarned'],$o['grandTotal'],$o['status'],$o['orderType'],$o['paymentMethod']]);}fclose($out);exit;}
-  if ($p==='admin/export/customers' && $m==='GET') {auth('admin');header('Content-Type: text/csv; charset=utf-8');header('Content-Disposition: attachment; filename="lms-customers-export-'.date('Y-m-d').'.csv"');$out=fopen('php://output','w');fputcsv($out,['Customer ID','Name','Mobile Number','Birthday','Anniversary','Referral Code','Cashback Balance','Order Count','Total Spent','First Order','Last Order','Created At']);$customers=stmt('SELECT c.id,c.name,c.mobileNumber,c.birthday,c.anniversary,c.referralCode,c.cashbackBalance,c.createdAt,COUNT(o.id) orderCount,COALESCE(SUM(o.grandTotal),0) totalSpent,MIN(o.createdAt) firstOrder,MAX(o.createdAt) lastOrder FROM customer c LEFT JOIN `order` o ON o.customerId=c.id GROUP BY c.id ORDER BY c.updatedAt DESC')->fetchAll();foreach($customers as $c){fputcsv($out,[$c['id'],$c['name'] ?? '',$c['mobileNumber'],$c['birthday'],$c['anniversary'],$c['referralCode'],$c['cashbackBalance'],$c['orderCount'],$c['totalSpent'],$c['firstOrder'],$c['lastOrder'],$c['createdAt']]);}fclose($out);exit;}
+  if ($p==='admin/export/customers' && $m==='GET') {auth('admin');header('Content-Type: text/csv; charset=utf-8');header('Content-Disposition: attachment; filename="lms-customers-export-'.date('Y-m-d').'.csv"');$out=fopen('php://output','w');fputcsv($out,['Customer ID','Name','Mobile Number','Birthday','Anniversary','Referral Code','Cashback Balance','Order Count','Total Spent','First Order','Last Order','Created At']);$customers=stmt('SELECT c.id,c.name,c.mobileNumber,c.birthday,c.anniversary,c.referralCode,c.createdAt,COUNT(o.id) orderCount,COALESCE(SUM(o.grandTotal),0) totalSpent,MIN(o.createdAt) firstOrder,MAX(o.createdAt) lastOrder FROM customer c LEFT JOIN `order` o ON o.customerId=c.id GROUP BY c.id ORDER BY c.updatedAt DESC')->fetchAll();foreach($customers as $c){fputcsv($out,[$c['id'],$c['name'] ?? '',$c['mobileNumber'],$c['birthday'],$c['anniversary'],$c['referralCode'],walletBalanceFor($c['mobileNumber']),$c['orderCount'],$c['totalSpent'],$c['firstOrder'],$c['lastOrder'],$c['createdAt']]);}fclose($out);exit;}
   if (preg_match('#^admin/orders/(\d+)/status$#',$p,$x)&&$m==='PATCH') {auth('admin');$b=body();$a=strtoupper($b['action']??$b['status']??'');$map=['CONFIRM'=>null,'CONFIRMED'=>null,'PREPARING'=>'PREPARING','READY'=>'COMPLETED','COMPLETED'=>'COMPLETED','DELIVERED'=>'DELIVERED','CANCELLED'=>'CANCELLED'];if(!array_key_exists($a,$map))out(['error'=>'Invalid order action'],400);$orderId=(int)$x[1];$wasConfirmed=!empty(stmt('SELECT confirmedAt FROM `order` WHERE id=?',[$orderId])->fetchColumn());$sets=[];if($a==='CONFIRM'||$a==='CONFIRMED')$sets[]='confirmedAt=COALESCE(confirmedAt,NOW())';if($map[$a])$sets[]='status='.db()->quote($map[$a]);if($a==='PREPARING'){$sets[]='preparationStartedAt=NOW()';$sets[]='preparationMinutes='.(int)max(1,min(180,$b['preparationMinutes']??1));}if($a==='READY'||$a==='COMPLETED')$sets[]='readyAt=NOW()';if($a==='DELIVERED')$sets[]='deliveredAt=NOW()';if($sets)stmt('UPDATE `order` SET '.implode(',',$sets).' WHERE id=?',[$orderId]);$updatedOrder=stmt('SELECT * FROM `order` WHERE id=?',[$orderId])->fetch();if($a==='CONFIRM'||$a==='CONFIRMED'){syncCashbackForOrder($orderId);if(!$wasConfirmed)sendOrderConfirmationWhatsapp($updatedOrder);}out(adminOrder($updatedOrder));}
-  if (preg_match('#^admin/orders/(\d+)$#',$p,$x)&&$m==='DELETE') {auth('admin');$id=(int)$x[1];$pdo=db();$pdo->beginTransaction();try{$order=stmt('SELECT customerId,referrerId FROM `order` WHERE id=?',[$id])->fetch();if(!$order)out(['error'=>'Order not found'],404);$affected=array_unique(array_filter([(int)$order['customerId'],(int)$order['referrerId']]));stmt('DELETE FROM cashbacktransaction WHERE orderId=?',[$id]);stmt('DELETE FROM `order` WHERE id=?',[$id]);foreach($affected as $customerId){$balance=(float)stmt("SELECT COALESCE(SUM(CASE WHEN type='REDEEMED' THEN -amount ELSE amount END),0) FROM cashbacktransaction WHERE customerId=?",[$customerId])->fetchColumn();stmt('UPDATE customer SET cashbackBalance=? WHERE id=?',[$balance,$customerId]);}$pdo->commit();out(['deleted'=>true]);}catch(Throwable $e){if($pdo->inTransaction())$pdo->rollBack();throw $e;}}
+  if (preg_match('#^admin/orders/(\d+)$#',$p,$x)&&$m==='DELETE') {auth('admin');$id=(int)$x[1];$pdo=db();$pdo->beginTransaction();try{$order=stmt('SELECT orderNumber,customerId,referrerId FROM `order` WHERE id=?',[$id])->fetch();if(!$order)out(['error'=>'Order not found'],404);stmt('DELETE FROM cashbacktransaction WHERE orderId=?',[$id]);stmt('DELETE FROM `order` WHERE id=?',[$id]);$pdo->commit();walletReverseForOrder($order['orderNumber']);out(['deleted'=>true]);}catch(Throwable $e){if($pdo->inTransaction())$pdo->rollBack();throw $e;}}
   out(['error'=>'Route not found'],404);
 } catch(Throwable $e) { error_log('Order app API: '.$e->getMessage()); if($e instanceof RuntimeException) out(['error'=>$e->getMessage()],422); out(['error'=>'Server error. Check database configuration and server error log.'],500); }
