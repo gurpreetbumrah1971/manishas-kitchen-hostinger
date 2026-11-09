@@ -169,7 +169,7 @@ const DISCOUNT_TIERS = {
   500: 0.05,
   1000: 0.10,
 };
-const FRONTEND_CATEGORY_ORDER = ['Parathas', 'Frankies', 'Kebabs', 'Pakodas', 'Egg Dishes', 'Snacks', 'Beverages'];
+const FRONTEND_CATEGORY_ORDER = ['Parathas', 'Chinese', 'Frankies', 'Kebabs', 'Pakodas', 'Egg Dishes', 'Snacks', 'Beverages'];
 const FRONTEND_CATEGORY_INDEX = new Map(FRONTEND_CATEGORY_ORDER.map((name, index) => [name, index]));
 const ADDITIONAL_STATIC_CATEGORIES = [
   { name: 'Kebabs', slug: 'kebabs' },
